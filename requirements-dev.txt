@@ -1,0 +1,6 @@
+# 开发 / 测试 / 打包依赖
+pytest>=7.0
+pyinstaller>=6.0
+setuptools>=61.0
+wheel
+# kong 对拍测试需要 node（tools/kong_ref.js）；没有 node 时该用例会自动跳过

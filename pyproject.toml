@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ankisnip"
+version = "0.1.0"
+description = "截图 → 箭头/文字/挖空 → 保存为 Anki 卡片（Windows/macOS 常驻托盘软件）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "PySide6>=6.5",
+    "pynput>=1.7",
+    "pycryptodome>=3.18",
+    "genanki>=0.13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pyinstaller>=6.0"]
+
+[project.gui-scripts]
+ankisnip = "ankisnip.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ankisnip*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning"]

@@ -1,0 +1,5 @@
+# 运行时依赖
+PySide6>=6.5
+pynput>=1.7
+pycryptodome>=3.18
+genanki>=0.13

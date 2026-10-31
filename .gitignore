@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# 打包 / 运行产物
+*.apkg
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 本地 AI 助手工作目录（WorkBuddy 记忆 / 技能）
+.workbuddy/
