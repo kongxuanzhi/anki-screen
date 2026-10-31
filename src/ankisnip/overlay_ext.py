@@ -142,7 +142,6 @@ class AnkiCaptureOverlay(CaptureOverlay):
         tb.fontSizeChanged.connect(self._on_font_size_changed)
         tb.undoRequested.connect(self._undo)
         tb.redoRequested.connect(self._redo)
-        tb.deleteRequested.connect(self._delete_selected)
         tb.zoomInRequested.connect(lambda: self._with_canvas(lambda c: c.zoom_by(1.25)))
         tb.zoomOutRequested.connect(lambda: self._with_canvas(lambda c: c.zoom_by(1 / 1.25)))
         tb.zoomResetRequested.connect(
@@ -178,6 +177,8 @@ class AnkiCaptureOverlay(CaptureOverlay):
             if self._phase is Phase.DRAW and self._canvas is not None:
                 self._canvas.set_tool(None)
                 self._canvas.setFocus(Qt.OtherFocusReason)
+                # 同步工具条：选择工具不需要第二行（颜色 / 线宽 / 字号）。
+                self._sync_toolbar_tool(None)
             return
         self.enter_draw_mode(tool)
 
@@ -208,10 +209,6 @@ class AnkiCaptureOverlay(CaptureOverlay):
             self._stack.redo()
         self._refresh_toolbar_state()
         self.update()
-
-    def _delete_selected(self) -> None:
-        if self._canvas is not None:
-            self._canvas.delete_selected()
 
     def _sync_toolbar_tool(self, tool: Optional[ann.ToolType]) -> None:
         tb = self._toolbar

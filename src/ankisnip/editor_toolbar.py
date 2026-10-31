@@ -59,6 +59,9 @@ _ALL_DRAW_TOOLS = (
     ToolType.RECT, ToolType.ELLIPSE, ToolType.HIGHLIGHT,
 )
 
+#: 第一行所有按钮统一高度，避免文字按钮 / 菜单按钮比工具图标高出一截。
+_ROW_BUTTON_HEIGHT = 28
+
 _STYLE = """
 #EditorToolbar { background: #2b2b2b; border-radius: 6px; }
 #EditorContextBar { background: #232323; border-radius: 4px; }
@@ -70,6 +73,12 @@ QToolButton:hover, QPushButton:hover { background: #3d3d3d; }
 QToolButton:checked { background: #0a84ff; color: white; }
 QToolButton:disabled { color: #777; }
 QPushButton#save { background: #30d158; color: #10240f; font-weight: 600; }
+/* 缩放 / 更多是文字按钮，字号和下拉指示符压小，避免比工具图标显大。 */
+QToolButton#zoomButton, QToolButton#moreButton {
+    font-size: 13px; padding: 3px 6px; color: #ddd;
+}
+QToolButton#zoomButton::menu-indicator,
+QToolButton#moreButton::menu-indicator { image: none; width: 0px; }
 QLabel { color: #bbb; padding: 0 4px; }
 QSpinBox {
     color: #eee; background: #1c1c1c; border: 1px solid #444;
@@ -89,7 +98,6 @@ class EditorToolbar(QFrame):
     fontSizeChanged = Signal(int)
     undoRequested = Signal()
     redoRequested = Signal()
-    deleteRequested = Signal()
     zoomInRequested = Signal()
     zoomOutRequested = Signal()
     zoomResetRequested = Signal()
@@ -123,6 +131,7 @@ class EditorToolbar(QFrame):
 
         self._reselect_btn = QPushButton("⛶", self)
         self._reselect_btn.setToolTip("回到选区：重新调整截图范围")
+        self._reselect_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         self._reselect_btn.clicked.connect(self.reselectRequested.emit)
         row.addWidget(self._reselect_btn)
 
@@ -136,7 +145,9 @@ class EditorToolbar(QFrame):
             btn.setText(label)
             btn.setToolTip(tip)
             btn.setCheckable(True)
-            if tool is None:
+            btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
+            # 默认选中第一个（挖空）——选区态下用户最可能用的就是这个工具。
+            if tool == _PRIMARY_TOOLS[0][0]:
                 btn.setChecked(True)
             btn.clicked.connect(lambda _=False, t=tool: self.toolSelected.emit(t))
             self._group.addButton(btn)
@@ -151,6 +162,7 @@ class EditorToolbar(QFrame):
         ]:
             btn = QPushButton(text, self)
             btn.setToolTip(tip)
+            btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
             btn.clicked.connect(signal.emit)
             row.addWidget(btn)
 
@@ -159,9 +171,11 @@ class EditorToolbar(QFrame):
         row.addWidget(spacer)
 
         self._zoom_btn = QToolButton(self)
-        self._zoom_btn.setText("100%")
+        self._zoom_btn.setObjectName("zoomButton")
+        self._zoom_btn.setText("100% ▾")
         self._zoom_btn.setToolTip("缩放：放大 / 缩小 / 适应窗口 / 100%")
         self._zoom_btn.setPopupMode(QToolButton.InstantPopup)
+        self._zoom_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         self._zoom_menu = QMenu(self._zoom_btn)
         for text, signal in (
             ("放大", self.zoomInRequested),
@@ -175,27 +189,30 @@ class EditorToolbar(QFrame):
         row.addWidget(self._zoom_btn)
 
         self._more_btn = QToolButton(self)
-        self._more_btn.setText("⋯")
-        self._more_btn.setToolTip("更多标注 / 保存图片 / 删除选中")
+        self._more_btn.setObjectName("moreButton")
+        self._more_btn.setText("⋯ ▾")
+        self._more_btn.setToolTip("更多标注：矩形 / 椭圆 / 高亮")
         self._more_btn.setPopupMode(QToolButton.InstantPopup)
+        self._more_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         self._more_menu = QMenu(self._more_btn)
-        more_tools = self._more_menu.addMenu("更多标注")
         for tool, title in _SECONDARY_TOOLS:
-            action = more_tools.addAction(title)
+            action = self._more_menu.addAction(title)
             action.triggered.connect(
                 lambda _=False, t=tool: self.toolSelected.emit(t))
-        self._more_menu.addSeparator()
-        save_image = self._more_menu.addAction("保存图片…")
-        save_image.triggered.connect(lambda _=False: self.saveImageRequested.emit())
-        delete = self._more_menu.addAction("删除选中")
-        delete.triggered.connect(lambda _=False: self.deleteRequested.emit())
         self._more_btn.setMenu(self._more_menu)
         row.addWidget(self._more_btn)
 
         copy_btn = QPushButton("复制", self)
         copy_btn.setToolTip("把烧录后的图片复制到剪贴板（含挖空）")
+        copy_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         copy_btn.clicked.connect(self.copyRequested.emit)
         row.addWidget(copy_btn)
+
+        self._save_image_btn = QPushButton("保存图片…", self)
+        self._save_image_btn.setToolTip("把烧录后的图片存到磁盘（含挖空）")
+        self._save_image_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
+        self._save_image_btn.clicked.connect(self.saveImageRequested.emit)
+        row.addWidget(self._save_image_btn)
 
         self._mask_label = QLabel("", self)
         self._mask_label.setVisible(False)
@@ -204,11 +221,13 @@ class EditorToolbar(QFrame):
         self._save_btn = QPushButton("保存到 Anki", self)
         self._save_btn.setObjectName("save")
         self._save_btn.setToolTip("烧录箭头/文字，挖空写入 kong 字段，新建 Anki 卡片")
+        self._save_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         self._save_btn.clicked.connect(self.saveToAnkiRequested.emit)
         row.addWidget(self._save_btn)
 
         cancel_btn = QPushButton("✕", self)
         cancel_btn.setToolTip("放弃本次截图（Esc）")
+        cancel_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         cancel_btn.clicked.connect(self.cancelRequested.emit)
         row.addWidget(cancel_btn)
 
@@ -336,8 +355,8 @@ class EditorToolbar(QFrame):
         self._reselect_btn.setEnabled(enabled)
 
     def set_zoom_text(self, text: str) -> None:
-        # QToolButton 的 InstantPopup 会自己画下拉指示符，文字里不要再带 ▾。
-        self._zoom_btn.setText(text)
+        # 原生 menu-indicator 已由样式隐藏，用缩小字号的文字 ▾ 代替。
+        self._zoom_btn.setText(f"{text} ▾")
         self._zoom_btn.setEnabled(text != "选区")
 
     def set_mask_count(self, count: int) -> None:

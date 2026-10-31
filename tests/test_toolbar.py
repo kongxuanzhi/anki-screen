@@ -67,15 +67,20 @@ def test_context_row_follows_editing_and_tool():
         tb.hide()
 
 
-def test_secondary_tools_and_save_image_live_in_overflow_menu():
+def test_secondary_tools_live_in_overflow_and_save_image_is_on_row():
     tb = _toolbar()
     titles = [a.text() for a in tb._more_menu.actions()]
-    # 子菜单 + 保存图片 + 删除选中
-    assert "更多标注" in titles
-    assert "保存图片…" in titles
-    submenu = next(a.menu() for a in tb._more_menu.actions() if a.menu())
-    sub_titles = [a.text() for a in submenu.actions()]
-    assert sub_titles == ["矩形", "椭圆", "高亮"]
+    assert titles == ["矩形", "椭圆", "高亮"], "「⋯」只放低频工具"
+    assert tb._save_image_btn.text() == "保存图片…", "保存图片放在第一行"
+    assert tb._save_image_btn.parent() is tb
+
+
+def test_first_tool_is_checked_by_default():
+    tb = _toolbar()
+    mask_btn = next(btn for btn, tool in tb._tool_buttons if tool == ToolType.MASK)
+    assert mask_btn.isChecked(), "默认选中的应该是第一个工具（挖空）"
+    others = [btn for btn, tool in tb._tool_buttons if tool != ToolType.MASK]
+    assert not any(btn.isChecked() for btn in others)
 
 
 def test_mask_count_badge():
