@@ -22,6 +22,7 @@ from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QMouseEvent, QPixmap
 
 from ankisnip.base import annotations as ann
+from ankisnip.mask_colors import MASK_COLORS
 from ankisnip.overlay_ext import AnkiCaptureOverlay
 from ankisnip.settings import (EXPORT_SCALE_NATIVE, EXPORT_SCALE_SCREEN,
                                Settings)
@@ -67,6 +68,9 @@ def retina_overlay():
     """
     settings = Settings()
     settings.export_scale = EXPORT_SCALE_NATIVE
+    # 像素断言依赖固定的红色；模板支持的红色是 #ff3e05（7 色之一）。
+    # 不要把测试绑死在 Config 的默认色上（默认已对齐模板的 #ff8d05）。
+    settings.pen_color = "#ff3e05"
     ov = AnkiCaptureOverlay(_RetinaShot(), settings)
     ov._selection = QRectF(SELECTION)
     ov._ensure_toolbar()
@@ -180,6 +184,7 @@ def test_export_size_screen_mode_keeps_annotation_geometry():
     """screen 模式下画出来的标注，位置要对得上（只是整体按屏幕点重采样）。"""
     settings = Settings()
     settings.export_scale = "screen"
+    settings.pen_color = "#ff3e05"  # 像素断言依赖固定红色（7 色之一）
     ov = AnkiCaptureOverlay(_RetinaShot(), settings)
     try:
         ov._selection = QRectF(SELECTION)
@@ -240,6 +245,20 @@ def test_annotation_bakes_at_full_resolution(retina_overlay, tool):
     if tool in _HOLLOW:
         assert not _red_pixels_near(image, 200, 150, r=2), \
             f"{tool}: {tool} 内部不应被填充"
+
+
+def test_unsupported_pen_color_is_normalized_and_persisted():
+    """历史配置里的任意 pen_color 在进入编辑器时收敛到模板的 7 色。"""
+    settings = Settings()
+    settings.export_scale = EXPORT_SCALE_NATIVE
+    settings.pen_color = "#FF3B30"
+    ov = AnkiCaptureOverlay(_RetinaShot(), settings)
+    try:
+        supported = {value for value, _label in MASK_COLORS}
+        assert ov._style.color.name() in supported
+        assert settings.pen_color in supported, "归一后的颜色要写回配置"
+    finally:
+        ov.close()
 
 
 def test_annotation_coordinates_are_image_pixels(retina_overlay):

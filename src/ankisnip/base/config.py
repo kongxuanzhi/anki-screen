@@ -44,7 +44,9 @@ class Config:
 
     @property
     def pen_color(self) -> str:
-        return str(self._s.value("pen_color", "#FF3B30"))
+        # AnkiSnip 注入：默认色对齐图片挖空模板的 defaultcolor（7 色之一）。
+        # 历史配置里的任意颜色会在 AnkiCaptureOverlay 启动时归一化。
+        return str(self._s.value("pen_color", "#ff8d05"))
 
     @pen_color.setter
     def pen_color(self, value: str) -> None:

@@ -52,6 +52,14 @@ class AnkiCaptureOverlay(CaptureOverlay):
 
     def __init__(self, shot, config) -> None:
         super().__init__(shot, config)
+        # 图片挖空模板只支持 7 个颜色：老配置里的任意 pen_color 在进入
+        # 编辑器前收敛到最近的支持色，并写回配置，避免继续产出不支持的色值。
+        from .mask_colors import normalize
+
+        normalized = normalize(self._style.color.name())
+        if normalized != self._style.color.name().lower():
+            self._style.color = QColor(normalized)
+            self._config.pen_color = normalized
         self._phase = Phase.SELECT
         self._canvas: Optional[EditorCanvas] = None
         # 标注栈由覆盖层持有：绘制态的画布被销毁重建时标注不会丢。
@@ -209,20 +217,26 @@ class AnkiCaptureOverlay(CaptureOverlay):
         tb = self._toolbar
         if tb is not None:
             tb.select_tool(tool)
+            # 上下文第二行的显隐会改变工具条高度，重新贴到选区下方。
+            self._reposition_toolbar()
 
     def _refresh_toolbar_state(self) -> None:
         tb = self._toolbar
         if tb is None:
             return
-        tb.set_reselect_enabled(self._phase is Phase.DRAW)
+        editing = self._phase is Phase.DRAW
+        tb.set_editing(editing)
+        tb.set_reselect_enabled(editing)
         canvas = self._canvas
         if canvas is None:
             tb.set_zoom_text("选区")
             tb.set_mask_count(len([a for a in self._draw_stack.items
                                    if isinstance(a, ann.MaskAnnotation)]))
-            return
-        tb.set_zoom_text(f"{canvas.transform.absolute_zoom * 100:.0f}%")
-        tb.set_mask_count(len(canvas.mask_rects()))
+        else:
+            tb.set_zoom_text(f"{canvas.transform.absolute_zoom * 100:.0f}%")
+            tb.set_mask_count(len(canvas.mask_rects()))
+        # 第二行出现 / 消失后尺寸变了，重新定位。
+        self._reposition_toolbar()
 
     # -- 鼠标 -------------------------------------------------------------- #
     def mousePressEvent(self, event) -> None:  # noqa: N802
