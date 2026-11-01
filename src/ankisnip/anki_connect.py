@@ -43,10 +43,8 @@ class AnkiConnect:
                 raw = response.read().decode("utf-8")
         except urllib.error.URLError as exc:
             raise AnkiConnectError(
-                f"无法连接 AnkiConnect（{self.url}）。\n"
                 "请确认 Anki 已启动，并已安装插件 AnkiConnect（代码 2055492159），"
                 "且未修改其监听端口。\n"
-                f"底层错误：{exc}"
             ) from exc
         except TimeoutError as exc:
             raise AnkiConnectError(f"AnkiConnect 响应超时（{self.timeout}s）。") from exc
@@ -112,6 +110,15 @@ class AnkiConnect:
 
     def create_deck(self, deck: str) -> None:
         self.invoke("createDeck", deck=deck)
+
+    def import_package(self, path: str) -> None:
+        """把整个 .apkg 导入 Anki（会带上包内的卡片 / 牌组）。"""
+        old_timeout = self.timeout
+        self.timeout = max(self.timeout, 60.0)
+        try:
+            self.invoke("importPackage", path=str(path))
+        finally:
+            self.timeout = old_timeout
 
     # -- 媒体 ------------------------------------------------------------- #
     def store_media_file(self, filename: str, data: bytes) -> str:
