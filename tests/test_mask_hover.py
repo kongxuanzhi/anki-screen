@@ -156,7 +156,8 @@ def test_carbon_event_is_deduplicated_across_targets():
 
     backend = _MacCarbonBackend()
     calls = []
-    backend._user_callback = lambda: calls.append(1)
+    # 旧实现用 _user_callback；现在按 id 分发，直接打桩 _callback_for_event。
+    backend._callback_for_event = lambda event: (lambda: calls.append(1))
 
     # 两个目标上的处理器收到的是同一个 EventRef
     backend._on_hotkey_event(None, 0x1000, None)
@@ -172,3 +173,31 @@ def test_carbon_event_is_deduplicated_across_targets():
     assert len(calls) == 2
     backend._on_hotkey_event(None, 0x3000, None)
     assert len(calls) == 3
+
+
+@pytest.mark.skipif(__import__("sys").platform != "darwin", reason="仅 macOS 后端")
+def test_carbon_callback_for_event_dispatches_by_id():
+    """多条热键共用一个事件处理器，按 EventHotKeyID.id 分发；签名不符忽略。"""
+    import ctypes
+
+    from ankisnip.hotkey import _MacCarbonBackend
+
+    backend = _MacCarbonBackend()
+    struct = backend._types()[0]
+
+    class FakeCarbon:
+        def GetEventParameter(self, event, _name, _kind, _types,
+                              _size, _actual, out):
+            target = ctypes.cast(out, ctypes.POINTER(struct))
+            target.contents.signature = \
+                0x414B534E if (event & 0xFF) != 99 else 0xDEADBEEF
+            target.contents.id = event & 0xFF
+            return 0
+
+    backend._carbon = FakeCarbon()
+    backend._callbacks = {1: lambda: None, 2: lambda: None}
+
+    assert backend._callback_for_event(0x1001) is backend._callbacks[1]
+    assert backend._callback_for_event(0x1002) is backend._callbacks[2]
+    assert backend._callback_for_event(0x1003) is None  # 没注册的 id
+    assert backend._callback_for_event(0x1063) is None  # 签名不是本应用

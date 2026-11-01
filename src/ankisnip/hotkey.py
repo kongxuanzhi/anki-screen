@@ -329,7 +329,7 @@ def format_hotkey(spec: str) -> str:
 # --------------------------------------------------------------------------- #
 
 class _Backend:
-    """热键后端接口。"""
+    """热键后端接口：一次注册**一组**热键（``{名称: (Hotkey, 回调)}``）。"""
 
     name = "unknown"
 
@@ -337,7 +337,7 @@ class _Backend:
     def available(cls) -> bool:
         return False
 
-    def start(self, hotkey: Hotkey, callback: Callable[[], None]) -> None:
+    def start(self, bindings: Dict[str, Tuple[Hotkey, Callable[[], None]]]) -> None:
         raise NotImplementedError
 
     def stop(self) -> None:
@@ -350,15 +350,20 @@ class _MacCarbonBackend(_Backend):
     name = "macOS Carbon RegisterEventHotKey"
 
     _SIG = 0x414B534E  # 'AKSN'
+    #: ``GetEventParameter`` 常量：直接对象参数 '----'、热键 ID 类型 'hkid'
+    #: （CarbonEvents.h 里的 ``kEventParamDirectObject`` / ``typeEventHotKeyID``）。
+    _K_EVENT_PARAM_DIRECT_OBJECT = 0x2D2D2D2D
+    _TYPE_EVENT_HOTKEY_ID = 0x686B6964
 
     def __init__(self) -> None:
         self._carbon = None
-        self._hotkey_ref = None
+        self._hotkey_refs: list = []
         # 一个卡通告可能装到多个事件目标上（见 ``start``），全部要能撤销。
         self._handler_refs: list = []
         self._callback_type = None
         self._callback = None
-        self._user_callback: Optional[Callable[[], None]] = None
+        #: EventHotKeyID.id → 回调（多条热键共用一个事件处理器，按 id 分发）。
+        self._callbacks: Dict[int, Callable[[], None]] = {}
         #: 同一个 EventRef 去重：见 :meth:`_on_hotkey_event`。
         self._seen: tuple = ()
 
@@ -377,12 +382,11 @@ class _MacCarbonBackend(_Backend):
 
         return EventHotKeyID, EventTypeSpec
 
-    def start(self, hotkey: Hotkey, callback: Callable[[], None]) -> None:
+    def start(self, bindings: Dict[str, Tuple[Hotkey, Callable[[], None]]]) -> None:
         carbon = _load_carbon()
         if carbon is None:
             raise HotkeyError("无法加载 Carbon 框架")
         self._carbon = carbon
-        self._user_callback = callback
 
         EventHotKeyID, EventTypeSpec = self._types()
 
@@ -401,8 +405,11 @@ class _MacCarbonBackend(_Backend):
         ]
         carbon.UnregisterEventHotKey.restype = ctypes.c_int32
         carbon.UnregisterEventHotKey.argtypes = [ctypes.c_void_p]
-
-        mods, vk = hotkey.native()
+        carbon.GetEventParameter.restype = ctypes.c_int32
+        carbon.GetEventParameter.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+            ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p,
+        ]
 
         # 回调必须由实例持有，否则被 GC 后 Carbon 会跳进已释放的地址。
         self._callback_type = ctypes.CFUNCTYPE(
@@ -433,50 +440,75 @@ class _MacCarbonBackend(_Backend):
         if not installed:
             raise HotkeyError("InstallEventHandler 失败（两个事件目标都装不上）")
 
-        hotkey_id = EventHotKeyID(self._SIG, 1)
-        ref = ctypes.c_void_p()
-        status = carbon.RegisterEventHotKey(
-            vk, mods, hotkey_id, carbon.GetApplicationEventTarget(), 0,
-            ctypes.byref(ref))
-        if status != 0:
-            self.stop()
-            if status == -9878:  # eventHotKeyExistsErr
-                raise HotkeyError("该快捷键已被系统或其它程序占用")
-            raise HotkeyError(f"RegisterEventHotKey 失败（OSStatus {status}）")
-        self._hotkey_ref = ref
+        # 多条热键共用上面那一个事件处理器，各拿一个 id（1..n）按 id 分发。
+        for index, (name, (hotkey, callback)) in enumerate(
+                bindings.items(), start=1):
+            mods, vk = hotkey.native()
+            hotkey_id = EventHotKeyID(self._SIG, index)
+            ref = ctypes.c_void_p()
+            status = carbon.RegisterEventHotKey(
+                vk, mods, hotkey_id, carbon.GetApplicationEventTarget(), 0,
+                ctypes.byref(ref))
+            if status != 0:
+                self.stop()
+                if status == -9878:  # eventHotKeyExistsErr
+                    raise HotkeyError(
+                        f"热键「{name}」{hotkey.display()} 已被系统或其它程序占用")
+                raise HotkeyError(f"RegisterEventHotKey 失败（OSStatus {status}）")
+            self._hotkey_refs.append(ref)
+            self._callbacks[index] = callback
 
     def _on_hotkey_event(self, _handler, event, _userdata) -> int:
         # 同一个 EventRef 会先经过 dispatcher 再经过 application 两个目标，
-        # 不按指针去重的话一次按键会触发两次截图。
+        # 不按指针去重的话一次按键会触发两次回调。
         key = int(event) if event else 0
         if key and key in self._seen:
             return 0
         # 只留住最近一个：指针会被系统复用，留长了反而会漏掉真实按键。
         self._seen = (key,)
+        callback = self._callback_for_event(event)
+        if callback is None:
+            return 0
         try:
-            if self._user_callback is not None:
-                self._user_callback()
+            callback()
         except Exception:  # 绝不让异常穿过 C 回调边界
             LOG.exception("热键回调异常")
         return 0
 
+    def _callback_for_event(self, event) -> Optional[Callable[[], None]]:
+        """从事件里读出 ``EventHotKeyID``，按 id 找到对应回调。
+
+        非本应用注册的热键事件（签名不匹配）直接忽略。
+        """
+        EventHotKeyID, _ = self._types()
+        hotkey_id = EventHotKeyID()
+        actual = ctypes.c_uint32()
+        status = self._carbon.GetEventParameter(
+            event, self._K_EVENT_PARAM_DIRECT_OBJECT, self._TYPE_EVENT_HOTKEY_ID,
+            None, ctypes.sizeof(hotkey_id), ctypes.byref(actual),
+            ctypes.byref(hotkey_id))
+        if status != 0 or hotkey_id.signature != self._SIG:
+            return None
+        return self._callbacks.get(hotkey_id.id)
+
     def stop(self) -> None:
         carbon = self._carbon
-        if carbon is not None and self._hotkey_ref is not None:
-            try:
-                carbon.UnregisterEventHotKey(self._hotkey_ref)
-            except Exception:
-                LOG.debug("UnregisterEventHotKey 失败", exc_info=True)
+        if carbon is not None:
+            for ref in self._hotkey_refs:
+                try:
+                    carbon.UnregisterEventHotKey(ref)
+                except Exception:
+                    LOG.debug("UnregisterEventHotKey 失败", exc_info=True)
         if carbon is not None and self._handler_refs:
             for handler_ref in self._handler_refs:
                 try:
                     carbon.RemoveEventHandler(handler_ref)
                 except Exception:
                     LOG.debug("RemoveEventHandler 失败（符号可能不可达）", exc_info=True)
-        self._hotkey_ref = None
+        self._hotkey_refs = []
         self._handler_refs = []
         self._seen = ()
-        self._user_callback = None
+        self._callbacks = {}
         self._callback = None
         self._callback_type = None
         self._carbon = None
@@ -488,41 +520,45 @@ class _Win32Backend(_Backend):
     name = "Win32 RegisterHotKey"
 
     _WM_HOTKEY = 0x0312
-    _ID = 0x414B
+    _ID_BASE = 0x414B
 
     def __init__(self) -> None:
         self._user32 = None
         self._hwnd = 0
         self._sink = None
         self._filter = None
-        self._user_callback: Optional[Callable[[], None]] = None
+        #: 消息 id → 回调（多条热键各拿一个 id，按 wParam 分发）。
+        self._ids: Dict[int, Callable[[], None]] = {}
         self._installed = False
 
     @classmethod
     def available(cls) -> bool:
         return _IS_WIN
 
-    def start(self, hotkey: Hotkey, callback: Callable[[], None]) -> None:
+    def start(self, bindings: Dict[str, Tuple[Hotkey, Callable[[], None]]]) -> None:
         from PySide6.QtCore import QAbstractNativeEventFilter, QCoreApplication
         from PySide6.QtWidgets import QWidget
 
         self._user32 = ctypes.WinDLL("user32", use_last_error=True)
-        self._user_callback = callback
 
         self._sink = QWidget()
         self._sink.setWindowTitle("AnkiSnip hotkey sink")
         self._hwnd = int(self._sink.winId())
 
-        mods, vk = hotkey.native()
-        ok = self._user32.RegisterHotKey(
-            ctypes.c_void_p(self._hwnd), self._ID,
-            mods | _WIN_MOD_NOREPEAT, vk)
-        if not ok:
-            self.stop()
-            err = ctypes.get_last_error()
-            if err == 1409:  # ERROR_HOTKEY_ALREADY_REGISTERED
-                raise HotkeyError("该快捷键已被其它程序占用")
-            raise HotkeyError(f"RegisterHotKey 失败（GetLastError {err}）")
+        for offset, (name, (hotkey, callback)) in enumerate(bindings.items()):
+            mods, vk = hotkey.native()
+            hotkey_id = self._ID_BASE + offset
+            ok = self._user32.RegisterHotKey(
+                ctypes.c_void_p(self._hwnd), hotkey_id,
+                mods | _WIN_MOD_NOREPEAT, vk)
+            if not ok:
+                self.stop()
+                err = ctypes.get_last_error()
+                if err == 1409:  # ERROR_HOTKEY_ALREADY_REGISTERED
+                    raise HotkeyError(
+                        f"热键「{name}」{hotkey.display()} 已被其它程序占用")
+                raise HotkeyError(f"RegisterHotKey 失败（GetLastError {err}）")
+            self._ids[hotkey_id] = callback
 
         filter_obj = _WinMessageFilter(self._handle_message)
         self._filter = filter_obj
@@ -540,13 +576,14 @@ class _Win32Backend(_Backend):
             msg = ctypes.cast(message, ctypes.POINTER(MSG)).contents
         except Exception:
             return False
-        if msg.message == self._WM_HOTKEY and int(msg.wParam) == self._ID:
-            if self._user_callback is not None:
+        if msg.message == self._WM_HOTKEY:
+            callback = self._ids.get(int(msg.wParam))
+            if callback is not None:
                 try:
-                    self._user_callback()
+                    callback()
                 except Exception:
                     LOG.exception("热键回调异常")
-            return True
+                return True
         return False
 
     def stop(self) -> None:
@@ -559,14 +596,16 @@ class _Win32Backend(_Backend):
                 LOG.debug("removeNativeEventFilter 失败", exc_info=True)
         self._installed = False
         if self._user32 is not None and self._hwnd:
-            try:
-                self._user32.UnregisterHotKey(ctypes.c_void_p(self._hwnd), self._ID)
-            except Exception:
-                LOG.debug("UnregisterHotKey 失败", exc_info=True)
+            for hotkey_id in self._ids:
+                try:
+                    self._user32.UnregisterHotKey(
+                        ctypes.c_void_p(self._hwnd), hotkey_id)
+                except Exception:
+                    LOG.debug("UnregisterHotKey 失败", exc_info=True)
         self._hwnd = 0
         self._user32 = None
         self._sink = None
-        self._user_callback = None
+        self._ids = {}
 
 
 class _WinMessageFilter:
@@ -606,11 +645,12 @@ class _PynputBackend(_Backend):
             return False
         return True
 
-    def start(self, hotkey: Hotkey, callback: Callable[[], None]) -> None:
+    def start(self, bindings: Dict[str, Tuple[Hotkey, Callable[[], None]]]) -> None:
         from pynput import keyboard
 
-        spec = hotkey.to_spec()
-        self._listener = keyboard.GlobalHotKeys({spec: callback})
+        mapping = {hotkey.to_spec(): callback
+                   for _name, (hotkey, callback) in bindings.items()}
+        self._listener = keyboard.GlobalHotKeys(mapping)
         self._listener.start()
         # GlobalHotKeys.start() 不抛异常，但线程可能已死；探一下。
         if not self._listener.is_alive():
@@ -676,35 +716,74 @@ class HotkeyStatus:
 
 
 class GlobalHotkeyManager:
-    """注册 / 注销 / 热重载全局热键，并记录可读状态。"""
+    """注册 / 注销 / 热重载**一组**全局热键，并记录每个绑定的可读状态。
 
-    def __init__(self, callback: Callable[[], None]) -> None:
+    一个后端要么整组注册成功、要么整组失败（换下一个后端），避免一部分热键
+    生效另一部分静默失效。``start`` 注册主热键（截图）和此前 :meth:`register`
+    进来的附加热键。
+    """
+
+    def __init__(self, callback: Optional[Callable[[], None]] = None) -> None:
         self._callback = callback
+        #: 名称 → (spec, 回调)。``capture`` 是主热键。
+        self._bindings: Dict[str, Tuple[str, Callable[[], None]]] = {}
         self._backend: Optional[_Backend] = None
-        self._status = HotkeyStatus()
+        self._statuses: Dict[str, HotkeyStatus] = {}
         self._lock = threading.RLock()
 
     # -- 生命周期 ---------------------------------------------------------- #
-    def start(self, spec: str) -> HotkeyStatus:
-        """注册热键；失败时逐个尝试后备后端。"""
+    def register(self, name: str, spec: str,
+                 callback: Callable[[], None]) -> None:
+        """登记一条附加热键；spec 为空 = 注销。下次 ``start`` / ``restart`` 生效。"""
+        with self._lock:
+            if spec.strip():
+                self._bindings[name] = (spec, callback)
+            else:
+                self._bindings.pop(name, None)
+
+    def start(self, spec: str,
+              callback: Optional[Callable[[], None]] = None) -> HotkeyStatus:
+        """注册主热键 + 全部附加热键；失败时逐个尝试后备后端。"""
         with self._lock:
             self.stop()
+            # capture 永远排第一（拿最小的 id），其余按注册顺序，重启后 id 也稳定。
+            entries = [("capture", (spec, callback or self._callback))]
+            entries += [(name, binding) for name, binding in self._bindings.items()
+                        if name != "capture"]
+            self._bindings = dict(entries)
+
+            bindings: Dict[str, Tuple[Hotkey, Callable[[], None]]] = {}
+            for name, (spec_text, cb) in entries:
+                try:
+                    bindings[name] = (Hotkey.parse(spec_text), cb)
+                except HotkeyError as exc:
+                    self._statuses = {name: HotkeyStatus(
+                        ok=False, spec=spec_text, error=str(exc))}
+                    return self.status
+
+            # 同一组合键分给两个动作：Carbon / Win32 会直接拒绝第二个注册，
+            # pynput 则会静默覆盖。与其后端各自表现，不如统一在这里拦下。
+            by_spec: Dict[str, str] = {}
+            for name, (hotkey, _cb) in bindings.items():
+                spec_text = hotkey.to_spec()
+                if spec_text in by_spec:
+                    self._statuses = {
+                        "capture": HotkeyStatus(
+                            ok=False, spec=spec_text,
+                            error=f"「{name}」和「{by_spec[spec_text]}」"
+                                  "设置了同一个快捷键")}
+                    return self.status
+                by_spec[spec_text] = name
+
             tried: List[str] = []
             errors: List[str] = []
-            try:
-                hotkey = Hotkey.parse(spec)
-            except HotkeyError as exc:
-                self._status = HotkeyStatus(ok=False, spec=str(spec), error=str(exc))
-                return self._status
-
-            status = HotkeyStatus(spec=hotkey.to_spec(), display=hotkey.display())
             for backend in _backend_candidates():
                 tried.append(backend.name)
                 if not backend.available():
                     errors.append(f"{backend.name}：当前平台不可用")
                     continue
                 try:
-                    backend.start(hotkey, self._callback)
+                    backend.start(bindings)
                 except HotkeyError as exc:
                     errors.append(f"{backend.name}：{exc}")
                     continue
@@ -713,20 +792,24 @@ class GlobalHotkeyManager:
                     errors.append(f"{backend.name}：{exc}")
                     continue
                 self._backend = backend
-                status.ok = True
-                status.backend = backend.name
-                status.tried = tried
-                status.error = ""
-                LOG.info("全局热键 %s 已注册（%s）", status.display, backend.name)
-                self._status = status
-                return status
+                self._statuses = {
+                    name: HotkeyStatus(ok=True, spec=hotkey.to_spec(),
+                                       display=hotkey.display(),
+                                       backend=backend.name, tried=list(tried))
+                    for name, (hotkey, _cb) in bindings.items()
+                }
+                LOG.info("全局热键已注册（%s）：%s", backend.name,
+                         "、".join(s.display for s in self._statuses.values()))
+                return self.status
 
-            status.ok = False
-            status.tried = tried
-            status.error = "；".join(errors) or "无可用后端"
-            LOG.error("全局热键注册失败：%s", status.error)
-            self._status = status
-            return status
+            self._statuses = {
+                name: HotkeyStatus(ok=False, spec=hotkey.to_spec(),
+                                   display=hotkey.display(), tried=list(tried),
+                                   error="；".join(errors) or "无可用后端")
+                for name, (hotkey, _cb) in bindings.items()
+            }
+            LOG.error("全局热键注册失败：%s", "；".join(errors))
+            return self.status
 
     def restart(self, spec: str) -> HotkeyStatus:
         """改设置后热重载（无需重启程序）。"""
@@ -740,20 +823,25 @@ class GlobalHotkeyManager:
                 except Exception:
                     LOG.debug("停止热键后端失败", exc_info=True)
                 self._backend = None
-            self._status = HotkeyStatus()
+            self._statuses = {}
 
     # -- 状态 --------------------------------------------------------------- #
     @property
     def status(self) -> HotkeyStatus:
-        return self._status
+        """主热键（截图）的状态。"""
+        return self._statuses.get("capture") or HotkeyStatus()
+
+    def status_for(self, name: str) -> Optional[HotkeyStatus]:
+        """附加热键的状态；没登记过返回 ``None``。"""
+        return self._statuses.get(name)
 
     @property
     def backend_name(self) -> str:
-        return self._status.backend or "（未注册）"
+        return self.status.backend or "（未注册）"
 
     @property
     def active(self) -> bool:
-        return self._status.ok
+        return self.status.ok
 
 
 def default_hotkey() -> str:

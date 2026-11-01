@@ -15,8 +15,14 @@ import logging
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QPixmap
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import (
+    QAction,
+    QDesktopServices,
+    QGuiApplication,
+    QKeySequence,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -26,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from . import logging_setup
 from .anki_connect import AnkiConnect, AnkiConnectError
-from .base.app import SnipApp, _fallback_icon
+from .base.app import SnipApp, _fallback_icon, _qt_shortcut_text
 from .base import permissions
 from .overlay_ext import AnkiCaptureOverlay
 from .saver import AnkiSaver
@@ -43,11 +49,21 @@ class AnkiSnipApp(SnipApp):
     overlay_cls = AnkiCaptureOverlay
     config_cls = Settings
 
+    #: 附加全局热键的请求信号：热键回调可能来自非 GUI 线程（pynput 后端），
+    #: 统一走队列投递到 GUI 线程再开窗口 / 弹菜单。
+    _openDirRequested = Signal()
+    _archiveRequested = Signal()
+    _openSettingsRequested = Signal()
+
     def __init__(self, app: QApplication) -> None:
         super().__init__(app)
         self._config: Settings
         self._saver = AnkiSaver(self._config)
         self._hotkey_suspend_depth = 0
+        self._settings_dialog_open = False
+        self._openDirRequested.connect(self._open_offline_dir, Qt.QueuedConnection)
+        self._archiveRequested.connect(self._archive_offline_pack, Qt.QueuedConnection)
+        self._openSettingsRequested.connect(self._open_settings, Qt.QueuedConnection)
         self._first_run_check()
         # Anki 开着就把笔记类型的真实模板抓下来，供以后离线导出 .apkg 用。
         # 放到单次定时器里，避免拖慢启动（也避免启动瞬间 Anki 还没起来）。
@@ -79,19 +95,56 @@ class AnkiSnipApp(SnipApp):
             else:
                 menu.addAction(action)
 
-        for title, slot in [
-            ("设置…", self._open_settings),
-            ("检查 Anki 连接", self._check_anki),
-        ]:
-            action = QAction(title, menu)
-            action.triggered.connect(slot)
+        settings_action = QAction("设置…", menu)
+        settings_action.triggered.connect(self._open_settings)
+        check_action = QAction("检查 Anki 连接", menu)
+        check_action.triggered.connect(self._check_anki)
+        for action in (settings_action, check_action):
             menu.insertAction(last, action)
+
+        # 附带全局热键的菜单项：菜单打开时由 AppKit 的 key equivalent 派发。
+        self._open_deck_action = open_deck
+        self._archive_action = archive
+        self._settings_action = settings_action
+        self._refresh_extra_menu_shortcuts()
 
         # 基类已经 setContextMenu()；再设一次，确保插入的菜单项进了原生 NSMenu。
         self._tray.setContextMenu(menu)
         self._tray.setToolTip("AnkiSnip — 截图挖空直达 Anki")
 
     # -- 热键 -------------------------------------------------------------- #
+    def _extra_hotkey_bindings(self):
+        """截图之外的全局热键：``{名称: (spec, 回调)}``。
+
+        基座在注册 / 热重载 / 挂起恢复时统一处理；spec 为空 = 不注册该项。
+        回调走信号队列投递，避免 pynput 后端直接在线程里碰 Qt 对象。
+        """
+        bindings = {}
+        for name, attr, signal in (
+            ("open_dir", "hotkey_open_dir", self._openDirRequested),
+            ("archive", "hotkey_archive", self._archiveRequested),
+            ("open_settings", "hotkey_open_settings", self._openSettingsRequested),
+        ):
+            spec = getattr(self._config, attr, "")
+            if spec:
+                bindings[name] = (spec, signal.emit)
+        return bindings
+
+    def _refresh_extra_menu_shortcuts(self) -> None:
+        """把附加全局热键挂到对应菜单项上（和「截图」项同一机制）。"""
+        for action, attr in ((getattr(self, "_open_deck_action", None),
+                              "hotkey_open_dir"),
+                             (getattr(self, "_archive_action", None),
+                              "hotkey_archive"),
+                             (getattr(self, "_settings_action", None),
+                              "hotkey_open_settings")):
+            if action is None:
+                continue
+            shortcut = _qt_shortcut_text(getattr(self._config, attr, ""))
+            action.setShortcut(QKeySequence(shortcut) if shortcut
+                               else QKeySequence())
+            action.setShortcutContext(Qt.WidgetShortcut)
+
     def _hotkey_suspended(self):
         """返回一个上下文管理器：期间挂起全局热键（录制新热键时用）。
 
@@ -134,17 +187,42 @@ class AnkiSnipApp(SnipApp):
         dialog.apply()
         # 用户主动设置快捷键 = 打开全局热键。
         self._config.hotkey_enabled = True
+        self._refresh_extra_menu_shortcuts()
         status = self.reload_hotkey()
+        manager = getattr(self, "_hotkey_manager", None)
+        extra_fail = ""
+        if manager is not None:
+            for name, label in (("open_dir", "打开牌组目录"),
+                                ("archive", "归档离线牌组"),
+                                ("open_settings", "打开设置界面")):
+                extra = manager.status_for(name)
+                if extra is not None and not extra.ok:
+                    extra_fail += f"\n「{label}」未生效：{extra.error}"
         if status is not None and not status.ok:
             self._show_message(
                 "快捷键设置",
-                "已保存，但注册失败：\n" + status.error,
+                "已保存，但注册失败：\n" + status.error + extra_fail,
+                QMessageBox.Warning)
+        elif extra_fail:
+            display = status.display if status is not None else dialog.spec()
+            self._show_message(
+                "快捷键设置",
+                f"已保存：{display}\n" + extra_fail,
                 QMessageBox.Warning)
         else:
             display = status.display if status is not None else dialog.spec()
             self._show_message("快捷键设置", f"已生效：{display}")
 
     def _open_settings(self) -> None:
+        if self._settings_dialog_open:
+            return
+        self._settings_dialog_open = True
+        try:
+            self._open_settings_impl()
+        finally:
+            self._settings_dialog_open = False
+
+    def _open_settings_impl(self) -> None:
         dialog = SettingsDialog(self._config)
         # 对话框一关就把前台交还回去（事件驱动，见 mac_focus.install_resign_on_close）。
         if _IS_MAC:

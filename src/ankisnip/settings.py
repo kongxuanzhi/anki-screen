@@ -273,6 +273,34 @@ class Settings(Config):
     def hotkey(self, value: str) -> None:
         self._s.setValue("hotkey", value)
 
+    # -- 附加全局热键：默认不注册（空 = 未设置），避免抢占系统快捷键 -------- #
+    @property
+    def hotkey_open_dir(self) -> str:
+        """「打开牌组目录」的全局热键；空字符串 = 不注册。"""
+        return str(self._s.value("hotkey_open_dir", ""))
+
+    @hotkey_open_dir.setter
+    def hotkey_open_dir(self, value: str) -> None:
+        self._s.setValue("hotkey_open_dir", value)
+
+    @property
+    def hotkey_open_settings(self) -> str:
+        """「打开设置界面」的全局热键；空字符串 = 不注册。"""
+        return str(self._s.value("hotkey_open_settings", ""))
+
+    @hotkey_open_settings.setter
+    def hotkey_open_settings(self, value: str) -> None:
+        self._s.setValue("hotkey_open_settings", value)
+
+    @property
+    def hotkey_archive(self) -> str:
+        """「归档离线牌组」的全局热键；空字符串 = 不注册。"""
+        return str(self._s.value("hotkey_archive", ""))
+
+    @hotkey_archive.setter
+    def hotkey_archive(self, value: str) -> None:
+        self._s.setValue("hotkey_archive", value)
+
 
 #: 跨平台默认热键（pynput 记法，见 :mod:`ankisnip.hotkey`）
 from .hotkey import default_hotkey as _default_hotkey  # noqa: E402

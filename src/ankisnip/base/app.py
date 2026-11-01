@@ -206,6 +206,14 @@ class SnipApp(QObject):
     # ------------------------------------------------------------------ #
     # global hotkey (added: native-first, pynput fallback)
     # ------------------------------------------------------------------ #
+    def _extra_hotkey_bindings(self):
+        """子类可覆写：截图之外的附加全局热键，``{名称: (spec, 回调)}``。
+
+        登记进同一个 ``GlobalHotkeyManager``，与主热键一起注册 / 热重载 /
+        挂起恢复，避免多个后端实例互相抢按键。
+        """
+        return {}
+
     def _install_hotkey(self) -> None:
         """注册全局热键。
 
@@ -221,6 +229,8 @@ class SnipApp(QObject):
             return
 
         self._hotkey_manager = GlobalHotkeyManager(self._on_hotkey)
+        for name, (spec, callback) in self._extra_hotkey_bindings().items():
+            self._hotkey_manager.register(name, spec, callback)
         if not getattr(self._config, "hotkey_enabled", True):
             self._set_capture_label(with_hotkey=False)
             return
@@ -266,12 +276,12 @@ class SnipApp(QObject):
             self._set_capture_label(with_hotkey=False)
 
     def _hotkey_failure_message(self, status) -> str:
-        """把注册失败翻译成一句用户能看懂、能动手的提示。"""
+        """把注册失败翻译成一句用户能看懂、能动手的提示。
+
+        全局热键走 Carbon / RegisterHotKey 原生注册，不需要任何系统权限，
+        所以不再提「辅助功能」——那只是 pynput 兜底后端的内部细节。
+        """
         text = status.describe()
-        if _IS_MAC:
-            if not permissions.accessibility_trusted():
-                text += ("\n\n未授予「辅助功能」，pynput 兜底方案无法使用。"
-                         "可在托盘菜单「权限设置…」中开启，或换一个未被占用的组合键。")
         text += "\n\n也可以点托盘图标 →「截图」临时使用，或在「设置…」里更换快捷键。"
         return text
 
@@ -287,6 +297,9 @@ class SnipApp(QObject):
             self._install_hotkey()
             manager = getattr(self, "_hotkey_manager", None)
             return getattr(manager, "status", None)
+        # 附加热键的设置可能刚变过（快捷键设置弹窗），先重新登记再整体热重载。
+        for name, (spec, callback) in self._extra_hotkey_bindings().items():
+            manager.register(name, spec, callback)
         status = manager.restart(self._config.hotkey)
         self._set_capture_label(with_hotkey=status.ok)
         return status

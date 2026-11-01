@@ -142,13 +142,14 @@ def test_manager_uses_first_available_backend(monkeypatch):
         def available(cls):
             return True
 
-        def start(self, hotkey, callback):
-            calls.append(hotkey.to_spec())
+        def start(self, bindings):
+            for hotkey, callback in bindings.values():
+                calls.append(hotkey.to_spec())
+                callback()
             if self.fail:
                 from ankisnip.hotkey import HotkeyError
 
                 raise HotkeyError("boom")
-            callback()
 
         def stop(self):
             calls.append("stop")
@@ -174,7 +175,7 @@ def test_manager_all_backends_failing(monkeypatch):
         def available(cls):
             return False
 
-        def start(self, hotkey, callback):
+        def start(self, bindings):
             raise AssertionError("should not be called")
 
         def stop(self):
@@ -199,8 +200,9 @@ def test_manager_restart_swaps_hotkey(monkeypatch):
         def available(cls):
             return True
 
-        def start(self, hotkey, callback):
-            seen.append(hotkey.to_spec())
+        def start(self, bindings):
+            for hotkey, _cb in bindings.values():
+                seen.append(hotkey.to_spec())
 
         def stop(self):
             seen.append(None)
@@ -212,6 +214,66 @@ def test_manager_restart_swaps_hotkey(monkeypatch):
     manager.start("<ctrl>+<shift>+a")
     manager.restart("<ctrl>+<alt>+b")
     assert seen == ["<ctrl>+<shift>+a", None, "<ctrl>+<alt>+b"]
+
+
+def test_manager_registers_extra_bindings_together(monkeypatch):
+    """附加热键和主热键整组交给同一个后端；每个绑定都有独立状态。"""
+    received = []
+
+    class Recorder:
+        name = "recorder"
+
+        @classmethod
+        def available(cls):
+            return True
+
+        def start(self, bindings):
+            received.append(list(bindings.items()))
+
+        def stop(self):
+            pass
+
+    import ankisnip.hotkey as hotkey_mod
+
+    monkeypatch.setattr(hotkey_mod, "_backend_candidates", lambda: [Recorder()])
+    manager = GlobalHotkeyManager(lambda: None)
+    manager.register("open_dir", "<cmd>+<shift>+d", lambda: None)
+    manager.register("open_settings", "<cmd>+<shift>+p", lambda: None)
+    status = manager.start("<cmd>+<shift>+a")
+    assert status.ok
+    # capture 第一，注册顺序稳定
+    assert [name for name, _ in received[0]] == \
+        ["capture", "open_dir", "open_settings"]
+    assert manager.status_for("open_dir").ok
+    assert manager.status_for("open_dir").spec == "<cmd>+<shift>+d"
+    assert manager.status_for("open_settings").ok
+    assert manager.status_for("nope") is None
+
+
+def test_manager_extra_binding_with_empty_spec_is_skipped(monkeypatch):
+    received = []
+
+    class Recorder:
+        name = "recorder"
+
+        @classmethod
+        def available(cls):
+            return True
+
+        def start(self, bindings):
+            received.append(list(bindings.keys()))
+
+        def stop(self):
+            pass
+
+    import ankisnip.hotkey as hotkey_mod
+
+    monkeypatch.setattr(hotkey_mod, "_backend_candidates", lambda: [Recorder()])
+    manager = GlobalHotkeyManager(lambda: None)
+    manager.register("open_dir", "", lambda: None)
+    manager.start("<ctrl>+<shift>+a")
+    assert received[0] == ["capture"]
+    assert manager.status_for("open_dir") is None
 
 
 def test_hotkey_dialog_exposes_hotkey_recorder():
@@ -240,6 +302,60 @@ def test_hotkey_dialog_ignores_non_widget_parent():
 
     dialog = HotkeyDialog(Settings(), "状态", QObject())
     assert dialog.parent() is None
+
+
+def test_hotkey_dialog_applies_extra_bindings():
+    """快捷键设置同时保存四条热键：截图 / 打开牌组目录 / 归档 / 打开设置界面。"""
+    from ankisnip.hotkey_dialog import HotkeyDialog
+    from ankisnip.settings import Settings
+
+    settings = Settings()
+    settings.hotkey_open_dir = ""
+    settings.hotkey_open_settings = ""
+    settings.hotkey_archive = ""
+    dialog = HotkeyDialog(settings)
+    assert set(dialog.extra_edits) == \
+        {"hotkey_open_dir", "hotkey_archive", "hotkey_open_settings"}
+
+    dialog.hotkey_edit.set_spec("<cmd>+<shift>+a")
+    dialog.extra_edits["hotkey_open_dir"].set_spec("<cmd>+<shift>+d")
+    dialog.extra_edits["hotkey_archive"].set_spec("<cmd>+<shift>+g")
+    dialog.extra_edits["hotkey_open_settings"].set_spec("")
+    dialog.apply()
+    assert settings.hotkey == "<cmd>+<shift>+a"
+    assert settings.hotkey_open_dir == "<cmd>+<shift>+d"
+    assert settings.hotkey_archive == "<cmd>+<shift>+g"
+    assert settings.hotkey_open_settings == ""
+
+
+def test_hotkey_dialog_rejects_duplicate_specs(monkeypatch):
+    """同一个组合键不能同时分给两个动作。"""
+    from PySide6.QtWidgets import QMessageBox
+
+    from ankisnip.hotkey_dialog import HotkeyDialog
+    from ankisnip.settings import Settings
+
+    dialog = HotkeyDialog(Settings())
+    dialog.hotkey_edit.set_spec("<cmd>+<shift>+a")
+    dialog.extra_edits["hotkey_open_dir"].set_spec("<cmd>+<shift>+a")
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *args, **kwargs: warned.append(args))
+    dialog._validate_and_accept()
+    assert warned  # 弹了重复警告
+    assert dialog.result() != 1  # 1 = Accepted，被拒后窗口还开着
+
+
+def test_settings_expose_extra_hotkeys_with_empty_defaults():
+    """附加全局热键默认空 = 不注册，避免默认抢占系统快捷键。"""
+    from ankisnip.settings import Settings
+
+    settings = Settings()
+    settings.reset()  # 会话内共享测试 ini，先清掉其它测试写入的值
+    assert settings.hotkey_open_dir == ""
+    assert settings.hotkey_open_settings == ""
+    settings.hotkey_open_dir = "<cmd>+<shift>+d"
+    assert settings.hotkey_open_dir == "<cmd>+<shift>+d"
 
 
 def test_settings_dialog_only_exposes_image_field_choice():

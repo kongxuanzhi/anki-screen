@@ -111,3 +111,21 @@ def test_anki_tray_menu_entries_are_inserted_before_quit():
         assert titles.index("退出") == len(titles) - 1
     finally:
         obj._tray.hide()
+
+
+def test_extra_menu_items_carry_configured_shortcuts():
+    """「打开牌组目录」「归档」「设置…」和「截图」一样，把全局热键挂到菜单项上。"""
+    obj = _AnkiTrayHarness()
+    try:
+        obj._config.reset()  # 会话内共享测试 ini，先清掉其它测试写入的值
+        obj._refresh_extra_menu_shortcuts()
+        assert obj._open_deck_action.shortcut().isEmpty()  # 默认未设置
+        obj._config.hotkey_open_dir = "<cmd>+<shift>+d"
+        obj._config.hotkey_archive = "<cmd>+<shift>+g"
+        obj._config.hotkey_open_settings = "<cmd>+<shift>+p"
+        obj._refresh_extra_menu_shortcuts()
+        assert not obj._open_deck_action.shortcut().isEmpty()
+        assert not obj._archive_action.shortcut().isEmpty()
+        assert not obj._settings_action.shortcut().isEmpty()
+    finally:
+        obj._tray.hide()
