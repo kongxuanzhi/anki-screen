@@ -98,13 +98,15 @@ def test_anki_tray_menu_entries_are_inserted_before_quit():
         titles = [a.text() for a in obj._tray_menu.actions()]
         assert titles[0].startswith("截图")
         assert titles[1] == "快捷键设置…", "快捷键入口紧跟「截图」"
+        # 打开目录 → 设置目录 → 归档（归档是最不常用的维护动作，放最后）
         assert titles[2] == "打开牌组目录"
         assert titles[3] == "设置牌组目录…"
+        assert titles[4] == "归档离线牌组"
         for gone in ("打开保存目录", "设置保存目录…", "打开牌包目录",
-                     "打开日志目录", "热键状态…"):
+                     "打开日志目录", "热键状态…", "归档离线牌包"):
             assert gone not in titles
         for expected in ("快捷键设置…", "打开牌组目录", "设置牌组目录…", "设置…",
-                         "归档离线牌包", "检查 Anki 连接"):
+                         "归档离线牌组", "检查 Anki 连接"):
             assert expected in titles
         assert titles.index("退出") == len(titles) - 1
     finally:

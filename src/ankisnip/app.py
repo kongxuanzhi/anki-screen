@@ -61,18 +61,19 @@ class AnkiSnipApp(SnipApp):
         menu = self._tray_menu
         last = menu.actions()[-1]  # 「退出」之前插入
 
-        # 「牌组目录」两项紧跟「截图」，替代原来的保存目录两项。
+        # 「牌组目录」三项紧跟「快捷键设置」，替代原来的保存目录两项。
+        # 顺序：打开目录 → 设置目录 → 归档（归档是最不常用的维护动作，放最后）。
         actions = menu.actions()
         after_capture = actions[1] if len(actions) > 1 else None
         hotkey_action = QAction("快捷键设置…", menu)
         hotkey_action.triggered.connect(self._open_hotkey_settings)
         open_deck = QAction("打开牌组目录", menu)
         open_deck.triggered.connect(self._open_offline_dir)
-        archive = QAction("归档离线牌包", menu)
-        archive.triggered.connect(self._archive_offline_pack)
         choose_deck = QAction("设置牌组目录…", menu)
         choose_deck.triggered.connect(self._choose_offline_dir)
-        for action in (hotkey_action, open_deck, archive, choose_deck):
+        archive = QAction("归档离线牌组", menu)
+        archive.triggered.connect(self._archive_offline_pack)
+        for action in (hotkey_action, open_deck, choose_deck, archive):
             if after_capture is not None:
                 menu.insertAction(after_capture, action)
             else:
@@ -253,13 +254,13 @@ class AnkiSnipApp(SnipApp):
             f"离线牌包会保存到：\n{directory}")
 
     def _archive_offline_pack(self) -> None:
-        """把当前累积的牌包封口留档，之后重新开始一个新批次。"""
+        """把当前累积的牌组封口留档，之后重新开始一个新批次。"""
         try:
             batch = self._batch()
             if not batch.apkg_path.is_file():
                 self._show_message(
-                    "归档离线牌包",
-                    "还没有可归档的离线牌包。\n\n"
+                    "归档离线牌组",
+                    "还没有可归档的离线牌组。\n\n"
                     "在 Anki 没运行时「保存到 Anki」的卡片会先攒在：\n"
                     f"{self._config.offline_dir}",
                     QMessageBox.Information,
@@ -270,14 +271,14 @@ class AnkiSnipApp(SnipApp):
             total = batch.count
             archived = batch.archive()
         except Exception as exc:  # pragma: no cover - IO 异常
-            LOG.exception("归档离线牌包失败")
+            LOG.exception("归档离线牌组失败")
             self._show_message(
-                "归档离线牌包", f"归档失败：\n{exc}", QMessageBox.Critical)
+                "归档离线牌组", f"归档失败：\n{exc}", QMessageBox.Critical)
             return
         self._show_message(
-            "归档离线牌包",
-            f"已归档 {total} 张卡片的牌包：\n{archived}\n\n"
-            "双击即可导入 Anki；之后保存的卡片会攒进新牌包。",
+            "归档离线牌组",
+            f"已归档 {total} 张卡片的牌组：\n{archived}\n\n"
+            "双击即可导入 Anki；之后保存的卡片会攒进新牌组。",
             QMessageBox.Information,
             extra_label="打开目录",
             extra_slot=lambda: QDesktopServices.openUrl(
@@ -294,8 +295,8 @@ class AnkiSnipApp(SnipApp):
             self._show_message(
                 "检查 Anki 连接",
                 "无法连接 AnkiConnect。\n\n"
-                "请确认 Anki 已启动、已安装 AnkiConnect，"
-                "并且地址 / 端口正确。",
+                "请确认 Anki 正在运行、已安装插件 AnkiConnect"
+                "（代码 2055492159），且地址正确。",
                 QMessageBox.Warning)
             return
         # 顺手刷新模板快照：离线导出 .apkg 时能不能渲染挖空，全靠它。

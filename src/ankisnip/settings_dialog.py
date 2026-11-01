@@ -3,7 +3,7 @@
 分两页：
 
 * 「模板与保存」：当前模板、导入 .apkg / 从 Anki 选择模板、挖空图片写入字段、
-  标签、保存到的牌组、牌组目录、离线牌包归并方式、导出图片尺寸、AnkiConnect 地址；
+  标签、保存到的牌组、牌组目录、离线牌组归并方式、导出图片尺寸、AnkiConnect 地址；
 * 「高级」：常用设置（启用全局热键 / 开机自启动）。
 
 全局快捷键的录制不在这里，改由托盘菜单「快捷键设置…」单独弹窗。
@@ -171,12 +171,12 @@ class SettingsDialog(QDialog):
         dir_row = QHBoxLayout()
         self.dir_edit = QLineEdit(s.offline_dir)
         self.dir_edit.setToolTip(
-            "离线牌包（.apkg）和卡片图片的保存目录；和托盘的「打开牌组目录」是同一个位置。")
+            "离线牌组（.apkg）和卡片图片的保存目录；和托盘的「打开牌组目录」是同一个位置。")
         dir_row.addWidget(self.dir_edit, 1)
         pick = QPushButton("选择…")
         pick.clicked.connect(self._pick_dir)
         dir_row.addWidget(pick)
-        self._grid_row(grid, 5, "牌组目录（离线牌包）", self._layout_widget(dir_row))
+        self._grid_row(grid, 5, "牌组目录（离线牌组）", self._layout_widget(dir_row))
 
         self.batch_combo = QComboBox(self)
         for label, value in _BATCH_MODES:
@@ -187,7 +187,7 @@ class SettingsDialog(QDialog):
         self.batch_combo.setToolTip(
             "决定离线保存时卡片怎么攒在同一个 .apkg 里。牌组始终是同一个，"
             "这里只决定文件怎么切分。")
-        self._grid_row(grid, 6, "离线牌包归并方式", self.batch_combo)
+        self._grid_row(grid, 6, "离线牌组归并方式", self.batch_combo)
 
         self.export_combo = QComboBox(self)
         for label, value in _EXPORT_SCALES:
@@ -293,16 +293,33 @@ class SettingsDialog(QDialog):
         s.field_order = list(mapping.get("field_order") or s.field_order)
         self._refresh_template_labels()
 
+    def _anki_failed(self, title: str) -> None:
+        """连接 AnkiConnect 失败的统一反馈：状态栏一句话 + 简洁弹框。
+
+        不贴原始异常：底层错误（连接拒绝 / 响应格式等）对用户没有意义。
+        """
+        self.status.setText("✗ 无法连接 AnkiConnect。")
+        QMessageBox.warning(
+            self, title,
+            "无法连接 AnkiConnect。\n\n"
+            "请确认 Anki 正在运行、已安装插件 AnkiConnect（代码 2055492159），"
+            "且上面的地址正确。")
+
     def _pick_anki_template(self) -> None:
-        """从 Anki 现有的笔记类型里直接选一个模板。"""
+        """从 Anki 现有的笔记类型里直接选一个模板。
+
+        和「从Anki刷新」同一控制流：结果一律弹框展示，状态栏只留一句话。
+        """
         client = AnkiConnect(self.edits["anki_url"].text().strip())
         try:
             models = client.model_names()
-        except AnkiConnectError as exc:
-            self.status.setText(f"✗ 读取模板失败：{exc}")
+        except AnkiConnectError:
+            self._anki_failed("从 Anki 选择模板")
             return
         if not models:
             self.status.setText("Anki 里还没有笔记类型。")
+            QMessageBox.information(self, "从 Anki 选择模板",
+                                    "Anki 里还没有笔记类型。")
             return
         current = self.settings.model_name
         index = models.index(current) if current in models else 0
@@ -320,12 +337,13 @@ class SettingsDialog(QDialog):
         name = self.settings.model_name
         if not name:
             self.status.setText("✗ 还没有模板：先导入 .apkg 或从 Anki 选择。")
+            QMessageBox.warning(self, "从 Anki 选择模板",
+                                "还没有模板：先导入 .apkg 或从 Anki 选择。")
             return
         client = AnkiConnect(self.edits["anki_url"].text().strip())
         snap = template_store.capture_from_anki(client, name)
         if snap is None:
-            self.status.setText("✗ 抓取失败：请确认 Anki 正在运行、AnkiConnect 已安装，"
-                                "且模板名正确。")
+            self._anki_failed("从 Anki 选择模板")
             return
         model = apkg_template.ApkgModel(
             model_id=int(snap.get("model_id") or 0),
@@ -335,7 +353,9 @@ class SettingsDialog(QDialog):
             css=str(snap.get("css") or ""),
         )
         self._apply_mapping(apkg_template.field_mapping(model))
-        self.status.clear()
+        self.status.setText(f"✓ 已抓取模板「{name}」。")
+        QMessageBox.information(self, "从 Anki 选择模板",
+                                f"已抓取模板「{name}」。")
 
     def _import_apkg(self) -> None:
         from . import apkg_template, template_store
@@ -383,12 +403,11 @@ class SettingsDialog(QDialog):
                 return
             try:
                 client.import_package(path)
-            except AnkiConnectError as exc:
+            except AnkiConnectError:
                 QMessageBox.warning(
                     self, "模板已保存，但导入 Anki 失败",
-                    f"模板快照已保存，离线导出可以使用。\n\n"
-                    f"导入 Anki 失败：\n{exc}\n\n"
-                    "可以稍后在 Anki 里手动导入这个 .apkg。")
+                    "模板快照已保存，离线导出可以使用。\n\n"
+                    "导入 Anki 失败，可以稍后在 Anki 里手动导入这个 .apkg。")
                 return
             QMessageBox.information(
                 self, "模板已导入",
@@ -398,26 +417,18 @@ class SettingsDialog(QDialog):
             QApplication.restoreOverrideCursor()
 
     def _refresh_decks(self) -> None:
-        """从 AnkiConnect 读取牌组列表；成功 / 失败都给明确提示。"""
+        """从 AnkiConnect 读取牌组列表；成功 / 失败都弹框反馈。"""
         client = AnkiConnect(self.edits["anki_url"].text().strip())
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             decks = client.deck_names()
-        except AnkiConnectError as exc:
-            error = str(exc)
-            decks = []
-        else:
-            error = ""
+        except AnkiConnectError:
+            decks = None
         finally:
             QApplication.restoreOverrideCursor()
 
-        if error:
-            self.status.setText(f"✗ 从Anki刷新失败：{error}")
-            QMessageBox.warning(
-                self, "从Anki刷新",
-                f"无法连接 AnkiConnect：\n{error}\n\n"
-                "请确认 Anki 正在运行，并已安装 AnkiConnect（代码 2055492159），"
-                "且上面的地址 / 端口正确。")
+        if decks is None:
+            self._anki_failed("从Anki刷新")
             return
         if not decks:
             self.status.setText("已连接 AnkiConnect，但 Anki 里还没有牌组。")
@@ -435,22 +446,24 @@ class SettingsDialog(QDialog):
         self.deck_combo.addItems(names)
         self.deck_combo.setCurrentText(current if current else names[0])
         self.deck_combo.blockSignals(False)
-        self.status.setText(f"✓ 已从 AnkiConnect 刷新 {len(decks)} 个牌组；"
-                            f"当前：{self.deck_combo.currentText()}")
+        self.status.setText(f"✓ 已从 AnkiConnect 刷新 {len(decks)} 个牌组。")
         QMessageBox.information(
             self, "从Anki刷新",
             f"已从 AnkiConnect 读取 {len(decks)} 个牌组。")
 
     def _test_connection(self) -> None:
+        """测试 AnkiConnect：结果弹框反馈（与「从Anki刷新」同一控制流）。"""
         client = AnkiConnect(self.edits["anki_url"].text().strip())
         try:
             version = client.version()
             decks = client.deck_names()
-        except AnkiConnectError as exc:
-            self.status.setText(f"✗ {exc}")
+        except AnkiConnectError:
+            self._anki_failed("测试 AnkiConnect")
             return
-        self.status.setText(f"✓ AnkiConnect v{version} 可用；牌组 {len(decks)} 个："
-                            f" {', '.join(decks[:8])}")
+        self.status.setText(f"✓ AnkiConnect v{version} 可用；牌组 {len(decks)} 个。")
+        QMessageBox.information(
+            self, "测试 AnkiConnect",
+            f"AnkiConnect v{version} 连接正常。\n牌组：{len(decks)} 个。")
 
     # -- 取值 -------------------------------------------------------------- #
     def apply(self) -> None:
