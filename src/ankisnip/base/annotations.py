@@ -22,6 +22,10 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPolygonF,
+    QTextCharFormat,
+    QTextCursor,
+    QTextDocument,
+    QTextOption,
 )
 
 
@@ -244,23 +248,37 @@ class TextAnnotation(Annotation):
     def is_valid(self) -> bool:
         return bool(self.text.strip())
 
+    def _document(self) -> QTextDocument:
+        """与输入框同一套 QTextDocument 布局：NoWrap、零边距。"""
+        doc = QTextDocument()
+        doc.setDocumentMargin(0)
+        font = self._font()
+        doc.setDefaultFont(font)
+        option = QTextOption()
+        option.setWrapMode(QTextOption.NoWrap)
+        doc.setDefaultTextOption(option)
+        doc.setPlainText(self.text or "")
+        cursor = QTextCursor(doc)
+        cursor.select(QTextCursor.Document)
+        fmt = QTextCharFormat()
+        fmt.setFont(font)
+        fmt.setForeground(self.style.color)
+        cursor.mergeCharFormat(fmt)
+        return doc
+
     def bounding_rect(self) -> QRectF:
-        # Cheap estimate that avoids QFontMetrics so it works headlessly too.
-        lines = self.text.split("\n") or [""]
-        char_w = self.style.font_size * 0.62
-        width = max((len(line) for line in lines), default=0) * char_w
-        height = len(lines) * self.style.font_size * 1.3
-        return QRectF(self.pos.x(), self.pos.y(), max(width, 8.0), max(height, self.style.font_size))
+        size = self._document().size()
+        return QRectF(self.pos.x(), self.pos.y(), max(size.width(), 8.0),
+                      max(size.height(), self.style.font_size))
 
     def move(self, dx: float, dy: float) -> None:
         self.pos += QPointF(dx, dy)
 
     def draw(self, painter: QPainter, ctx: RenderContext) -> None:
+        # 和输入框共用 QTextDocument 布局，行距 / 换行 / 首行位置完全一致。
         painter.save()
-        painter.setPen(QPen(self.style.color))
-        painter.setFont(self._font())
-        rect = self.bounding_rect().adjusted(0, 0, 40, 10)
-        painter.drawText(rect, Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, self.text)
+        painter.translate(self.pos)
+        self._document().drawContents(painter)
         painter.restore()
 
 

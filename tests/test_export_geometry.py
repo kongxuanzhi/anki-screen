@@ -247,6 +247,40 @@ def test_annotation_bakes_at_full_resolution(retina_overlay, tool):
             f"{tool}: {tool} 内部不应被填充"
 
 
+def test_selection_edges_have_directional_resize_cursor(retina_overlay):
+    """选区四边 / 四角都要能抓，并显示对应方向的双箭头光标。"""
+    ov = retina_overlay
+    ov._selection = QRectF(100, 100, 200, 100)
+
+    assert ov._handle_at(QPointF(100, 125)) == "ml"
+    assert ov._handle_at(QPointF(150, 100)) == "tm"
+    assert ov._handle_at(QPointF(200, 150)) == "", "选区中心不是缩放手柄"
+
+    ov._update_cursor(QPointF(100, 125))
+    assert ov.cursor().shape() == Qt.SizeHorCursor
+    ov._update_cursor(QPointF(150, 100))
+    assert ov.cursor().shape() == Qt.SizeVerCursor
+    ov._update_cursor(QPointF(100, 100))
+    assert ov.cursor().shape() == Qt.SizeFDiagCursor
+    ov._update_cursor(QPointF(200, 150))
+    assert ov.cursor().shape() == Qt.SizeAllCursor
+
+
+def test_font_size_is_applied_and_persisted():
+    """字号从设置读取，改字号后写回设置，下次截图沿用。"""
+    settings = Settings()
+    settings.export_scale = EXPORT_SCALE_NATIVE
+    settings.font_size = 32
+    ov = AnkiCaptureOverlay(_RetinaShot(), settings)
+    try:
+        assert ov._style.font_size == 32
+        ov._on_font_size_changed(40)
+        assert ov._style.font_size == 40
+        assert settings.font_size == 40
+    finally:
+        ov.close()
+
+
 def test_unsupported_pen_color_is_normalized_and_persisted():
     """历史配置里的任意 pen_color 在进入编辑器时收敛到模板的 7 色。"""
     settings = Settings()

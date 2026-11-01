@@ -67,20 +67,48 @@ def test_context_row_follows_editing_and_tool():
         tb.hide()
 
 
+def test_reselect_button_highlights_in_select_phase():
+    """选区态默认高亮「回到选区」；绘制态把高亮让给当前工具。"""
+    tb = _toolbar()
+    assert tb._reselect_btn.isCheckable()
+    assert tb._reselect_btn.isChecked()
+
+    tb.set_editing(True)
+    tb.select_tool(ToolType.MASK)
+    assert not tb._reselect_btn.isChecked()
+    mask_btn = next(btn for btn, tool in tb._tool_buttons if tool == ToolType.MASK)
+    assert mask_btn.isChecked()
+
+    tb.set_editing(False)
+    assert tb._reselect_btn.isChecked()
+    assert not any(btn.isChecked() for btn, _tool in tb._tool_buttons)
+
+
+def test_reselect_button_cannot_be_unchecked_by_click():
+    tb = _toolbar()
+    assert tb._reselect_btn.isChecked()
+    tb._reselect_btn.click()
+    assert tb._reselect_btn.isChecked(), "单击「回到选区」不能取消选中"
+
+
+def test_select_color_index():
+    tb = _toolbar()
+    fired: list = []
+    tb.colorChanged.connect(fired.append)
+
+    tb.select_color_index(4)   # 数字键 5 → MASK_COLORS[4]
+
+    assert tb._color.name() == MASK_COLORS[4][0]
+    assert fired and fired[-1].name() == MASK_COLORS[4][0]
+    assert tb._color_buttons[MASK_COLORS[4][0]].isChecked()
+
+
 def test_secondary_tools_live_in_overflow_and_save_image_is_on_row():
     tb = _toolbar()
     titles = [a.text() for a in tb._more_menu.actions()]
     assert titles == ["矩形", "椭圆", "高亮"], "「⋯」只放低频工具"
     assert tb._save_image_btn.text() == "保存图片…", "保存图片放在第一行"
     assert tb._save_image_btn.parent() is tb
-
-
-def test_first_tool_is_checked_by_default():
-    tb = _toolbar()
-    mask_btn = next(btn for btn, tool in tb._tool_buttons if tool == ToolType.MASK)
-    assert mask_btn.isChecked(), "默认选中的应该是第一个工具（挖空）"
-    others = [btn for btn, tool in tb._tool_buttons if tool != ToolType.MASK]
-    assert not any(btn.isChecked() for btn in others)
 
 
 def test_mask_count_badge():

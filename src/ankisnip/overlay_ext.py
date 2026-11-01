@@ -60,6 +60,9 @@ class AnkiCaptureOverlay(CaptureOverlay):
         if normalized != self._style.color.name().lower():
             self._style.color = QColor(normalized)
             self._config.pen_color = normalized
+        # 字号也要沿用上次保存的值（基座 Style 默认 18，Settings 默认 24）。
+        self._style.font_size = int(
+            getattr(self._config, "font_size", self._style.font_size))
         self._phase = Phase.SELECT
         self._canvas: Optional[EditorCanvas] = None
         # 标注栈由覆盖层持有：绘制态的画布被销毁重建时标注不会丢。
@@ -99,6 +102,7 @@ class AnkiCaptureOverlay(CaptureOverlay):
         canvas.fit_to_window(margin=0.0)     # 视口 = 选区，铺满不留边
         canvas.viewChanged.connect(self._refresh_toolbar_state)
         canvas.stackChanged.connect(self._refresh_toolbar_state)
+        canvas.colorIndexSelected.connect(self._on_color_index)
         canvas.cancelRequested.connect(self._cancel)
         canvas.saveRequested.connect(lambda: self._finish("anki"))
         canvas.set_tool(tool)
@@ -184,8 +188,16 @@ class AnkiCaptureOverlay(CaptureOverlay):
 
     def _on_font_size_changed(self, size: int) -> None:
         self._style.font_size = int(size)
+        # 记住字号，下次截图沿用（和颜色 / 线宽一样持久化）。
+        self._config.font_size = int(size)
         if self._canvas is not None:
             self._canvas.set_font_size(int(size))
+
+    def _on_color_index(self, index: int) -> None:
+        """数字键 1-7：切换模板的 7 个颜色。"""
+        tb = self._toolbar
+        if tb is not None:
+            tb.select_color_index(index)
 
     def _with_canvas(self, fn) -> None:
         """把动作转发给标注画布；还在选区态就先进入绘制态。"""
@@ -223,7 +235,6 @@ class AnkiCaptureOverlay(CaptureOverlay):
             return
         editing = self._phase is Phase.DRAW
         tb.set_editing(editing)
-        tb.set_reselect_enabled(editing)
         canvas = self._canvas
         if canvas is None:
             tb.set_zoom_text("选区")
@@ -250,6 +261,13 @@ class AnkiCaptureOverlay(CaptureOverlay):
                 self.enter_draw_mode()
                 return
         super().mouseDoubleClickEvent(event)
+
+    def _update_cursor(self, pos: QPointF) -> None:
+        # 绘制态选区已锁住，不再显示缩放光标；选区内的光标由画布自己管。
+        if getattr(self, "_phase", Phase.SELECT) is Phase.DRAW:
+            self.setCursor(Qt.CrossCursor)
+            return
+        super()._update_cursor(pos)
 
     # -- 绘制 -------------------------------------------------------------- #
     def _draw_selection_chrome(self, painter: QPainter, sel) -> None:

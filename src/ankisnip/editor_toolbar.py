@@ -71,6 +71,7 @@ QToolButton, QPushButton {
 }
 QToolButton:hover, QPushButton:hover { background: #3d3d3d; }
 QToolButton:checked { background: #0a84ff; color: white; }
+QPushButton#reselectButton:checked { background: #0a84ff; color: white; }
 QToolButton:disabled { color: #777; }
 QPushButton#save { background: #30d158; color: #10240f; font-weight: 600; }
 /* 缩放 / 更多是文字按钮，字号和下拉指示符压小，避免比工具图标显大。 */
@@ -130,9 +131,16 @@ class EditorToolbar(QFrame):
         outer.addLayout(row)
 
         self._reselect_btn = QPushButton("⛶", self)
+        self._reselect_btn.setObjectName("reselectButton")
         self._reselect_btn.setToolTip("回到选区：重新调整截图范围")
         self._reselect_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
+        self._reselect_btn.setCheckable(True)
+        self._reselect_btn.setChecked(True)   # 选区态默认高亮「回到选区」
         self._reselect_btn.clicked.connect(self.reselectRequested.emit)
+        # 单独放进独占组：单击已选中的「回到选区」不会把它取消掉。
+        self._reselect_group = QButtonGroup(self)
+        self._reselect_group.setExclusive(True)
+        self._reselect_group.addButton(self._reselect_btn)
         row.addWidget(self._reselect_btn)
 
         self._add_separator(row)
@@ -146,9 +154,6 @@ class EditorToolbar(QFrame):
             btn.setToolTip(tip)
             btn.setCheckable(True)
             btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
-            # 默认选中第一个（挖空）——选区态下用户最可能用的就是这个工具。
-            if tool == _PRIMARY_TOOLS[0][0]:
-                btn.setChecked(True)
             btn.clicked.connect(lambda _=False, t=tool: self.toolSelected.emit(t))
             self._group.addButton(btn)
             self._tool_buttons.append((btn, tool))
@@ -251,11 +256,11 @@ class EditorToolbar(QFrame):
         self._color_group = QButtonGroup(self)
         self._color_group.setExclusive(True)
         self._color_buttons: dict = {}
-        for value, label in MASK_COLORS:
+        for index, (value, label) in enumerate(MASK_COLORS, start=1):
             btn = QToolButton(self._ctx_color)
             btn.setCheckable(True)
             btn.setFixedSize(20, 20)
-            btn.setToolTip(f"{label} · {value}")
+            btn.setToolTip(f"{index} · {label} · {value}")
             btn.setStyleSheet(
                 f"QToolButton {{ background: {value}; border: 1px solid #555;"
                 f" border-radius: 9px; }}"
@@ -293,6 +298,9 @@ class EditorToolbar(QFrame):
         self._font_spin.setFixedWidth(56)
         self._font_spin.valueChanged.connect(self.fontSizeChanged.emit)
         font_layout.addWidget(self._font_spin)
+        self._text_hint = QLabel("Shift+Enter 换行", self._ctx_font)
+        self._text_hint.setStyleSheet("color: #888; font-size: 12px;")
+        font_layout.addWidget(self._text_hint)
         layout.addWidget(self._ctx_font)
 
         spacer = QWidget(frame)
@@ -338,6 +346,12 @@ class EditorToolbar(QFrame):
         for value, btn in self._color_buttons.items():
             btn.setChecked(value == current)
 
+    def _set_reselect_checked(self, checked: bool) -> None:
+        # 独占组会阻止 setChecked(False)，临时关掉互斥再改。
+        self._reselect_group.setExclusive(False)
+        self._reselect_btn.setChecked(checked)
+        self._reselect_group.setExclusive(True)
+
     # -- 外部接口 ---------------------------------------------------------- #
     def select_tool(self, tool) -> None:
         """同步按钮的选中态（覆盖层进入绘制态时由外部驱动）。"""
@@ -346,9 +360,22 @@ class EditorToolbar(QFrame):
             btn.setChecked((t is None and tool is None) or t == tool)
         self._update_context()
 
+    def select_color_index(self, index: int) -> None:
+        """按模板顺序选色（0=红 … 6=灰），供数字键 1-7 调用。"""
+        if 0 <= index < len(MASK_COLORS):
+            self._select_color(MASK_COLORS[index][0])
+
     def set_editing(self, editing: bool) -> None:
         """选区态 / 绘制态切换（决定第二行是否出现）。"""
         self._editing = bool(editing)
+        # 选区态默认高亮「回到选区」；进入绘制态后把高亮让给当前工具。
+        self._set_reselect_checked(not self._editing)
+        if not self._editing:
+            self._active_tool = None
+            self._group.setExclusive(False)
+            for btn, _tool in self._tool_buttons:
+                btn.setChecked(False)
+            self._group.setExclusive(True)
         self._update_context()
 
     def set_reselect_enabled(self, enabled: bool) -> None:

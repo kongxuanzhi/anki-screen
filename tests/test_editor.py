@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QColor, QImage, QMouseEvent
+from PySide6.QtGui import QColor, QFontMetricsF, QImage, QKeyEvent, QMouseEvent
 
 from ankisnip.base import annotations as ann
 from ankisnip.editor_canvas import EditorCanvas
@@ -118,3 +118,46 @@ def test_wheel_zoom_keeps_anchor():
     assert after.x() == pytest.approx(before.x(), abs=1e-6)
     assert after.y() == pytest.approx(before.y(), abs=1e-6)
     assert c.transform.scale > 1.0
+
+
+def test_text_annotation_stays_on_one_line():
+    """中文按字符数估算会偏窄；必须用字体度量，且渲染不能自动换行。"""
+    style = ann.Style(QColor("#ff3e05"), 3, 24)
+    text = "这是一段比较长的中文文字用于验证不会自动换行"
+    note = ann.TextAnnotation(style, QPointF(10, 10), text)
+    rect = note.bounding_rect()
+    metrics = QFontMetricsF(note._font())
+    assert rect.width() >= metrics.horizontalAdvance(text)
+    assert rect.height() < metrics.lineSpacing() * 1.9, "单行文字不应折成两行"
+
+
+def test_number_keys_request_palette_color(canvas):
+    got: list = []
+    canvas.colorIndexSelected.connect(got.append)
+    canvas.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key_5, Qt.NoModifier))
+    assert got == [4], "数字键 5 应选择第 5 个颜色（索引 4）"
+
+
+def test_text_annotation_keeps_manual_line_breaks():
+    style = ann.Style(QColor("#ff3e05"), 3, 24)
+    note = ann.TextAnnotation(style, QPointF(10, 10), "第一行\n第二行")
+    metrics = QFontMetricsF(note._font())
+    assert note.bounding_rect().height() >= metrics.lineSpacing() * 2
+
+
+def test_mask_handle_cursors_are_directional(canvas):
+    canvas.set_tool(ann.ToolType.MASK)
+    _drag(canvas, QPointF(50, 50), QPointF(150, 120))
+    mask = canvas.stack.items[0]
+    canvas.set_tool(None)
+    canvas._selected = mask
+
+    rect = canvas.transform.image_rect_to_widget(mask.bounding_rect())
+    canvas._update_cursor(QPointF(rect.left(), rect.center().y()))
+    assert canvas.cursor().shape() == Qt.SizeHorCursor
+    canvas._update_cursor(QPointF(rect.center().x(), rect.top()))
+    assert canvas.cursor().shape() == Qt.SizeVerCursor
+    canvas._update_cursor(rect.topLeft())
+    assert canvas.cursor().shape() == Qt.SizeFDiagCursor
+    canvas._update_cursor(rect.topRight())
+    assert canvas.cursor().shape() == Qt.SizeBDiagCursor

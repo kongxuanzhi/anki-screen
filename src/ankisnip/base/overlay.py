@@ -29,8 +29,17 @@ from .capture import ScreenShot
 from .config import Config
 from .toolbar import CaptureToolbar
 
-_HANDLE = 8.0  # half-size of a resize handle in px
+_HANDLE = 8.0       # half-size of a resize handle in px
+_EDGE_GRAB = 6.0    # 边框可拖拽 / 显示缩放光标的宽度
 _DIM = QColor(0, 0, 0, 110)
+
+#: 选区手柄 → 方向光标。除了 8 个点，整条边也可以拖拽缩放。
+_HANDLE_CURSORS = {
+    "tl": Qt.SizeFDiagCursor, "br": Qt.SizeFDiagCursor,
+    "tr": Qt.SizeBDiagCursor, "bl": Qt.SizeBDiagCursor,
+    "ml": Qt.SizeHorCursor,  "mr": Qt.SizeHorCursor,
+    "tm": Qt.SizeVerCursor,  "bm": Qt.SizeVerCursor,
+}
 
 
 class _Mode(Enum):
@@ -236,10 +245,34 @@ class CaptureOverlay(QWidget):
         if self._selection is None:
             return ""
         sel = self._selection.normalized()
+        # 先认 8 个手柄圆点（含角点）
         for name, nx, ny in _HANDLES:
             c = QPointF(sel.x() + nx * sel.width(), sel.y() + ny * sel.height())
             if abs(pos.x() - c.x()) <= _HANDLE and abs(pos.y() - c.y()) <= _HANDLE:
                 return name
+        # 再认边框：整条边（含边框内外 6px）都能拖拽缩放，不再只能抓 8 个小点。
+        if (sel.left() - _EDGE_GRAB <= pos.x() <= sel.right() + _EDGE_GRAB
+                and sel.top() - _EDGE_GRAB <= pos.y() <= sel.bottom() + _EDGE_GRAB):
+            near_left = abs(pos.x() - sel.left()) <= _EDGE_GRAB
+            near_right = abs(pos.x() - sel.right()) <= _EDGE_GRAB
+            near_top = abs(pos.y() - sel.top()) <= _EDGE_GRAB
+            near_bottom = abs(pos.y() - sel.bottom()) <= _EDGE_GRAB
+            if near_left and near_top:
+                return "tl"
+            if near_right and near_top:
+                return "tr"
+            if near_left and near_bottom:
+                return "bl"
+            if near_right and near_bottom:
+                return "br"
+            if near_left:
+                return "ml"
+            if near_right:
+                return "mr"
+            if near_top:
+                return "tm"
+            if near_bottom:
+                return "bm"
         return ""
 
     def _resize_selection(self, pos: QPointF) -> None:
@@ -259,8 +292,10 @@ class CaptureOverlay(QWidget):
         if self._selection is None or self._active_tool is not None:
             self.setCursor(Qt.CrossCursor)
             return
-        if self._handle_at(pos):
-            self.setCursor(Qt.SizeAllCursor)
+        handle = self._handle_at(pos)
+        if handle in _HANDLE_CURSORS:
+            # 边缘 / 角点给方向光标（双箭头），让人一眼知道可以拖拽缩放。
+            self.setCursor(_HANDLE_CURSORS[handle])
         elif self._selection.normalized().contains(pos):
             self.setCursor(Qt.SizeAllCursor)
         else:
@@ -271,12 +306,17 @@ class CaptureOverlay(QWidget):
     # ------------------------------------------------------------------ #
     def _begin_text(self, pos: QPointF) -> None:
         edit = QLineEdit(self)
+        font = edit.font()
+        font.setPixelSize(self._style.font_size)
+        edit.setFont(font)
+        edit.setFrame(False)
         edit.setStyleSheet(
-            f"background: rgba(0,0,0,150); color: {self._style.color.name()};"
-            f" border: 1px dashed #0a84ff; font-size: {self._style.font_size}px;"
+            "QLineEdit { background: transparent; border: none; padding: 0;"
+            f" color: {self._style.color.name()};"
+            " selection-background-color: rgba(10,132,255,120); }"
         )
         edit.move(pos.toPoint())
-        edit.resize(180, self._style.font_size + 12)
+        edit.resize(180, self._style.font_size + 8)
         edit.editingFinished.connect(self._commit_text_edit)
         edit.show()
         edit.setFocus()

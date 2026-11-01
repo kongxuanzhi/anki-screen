@@ -18,14 +18,17 @@ from typing import List, Optional
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QFont,
     QImage,
+    QKeyEvent,
     QMouseEvent,
     QPainter,
+    QPalette,
     QPen,
     QPixmap,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QLineEdit, QSizePolicy, QWidget
+from PySide6.QtWidgets import QFrame, QSizePolicy, QTextEdit, QWidget
 
 from .base import annotations as ann
 from .coords import ViewTransform
@@ -36,8 +39,48 @@ _HANDLE_POSITIONS = [
     ("ml", 0.0, 0.5), ("mr", 1.0, 0.5),
     ("bl", 0.0, 1.0), ("bm", 0.5, 1.0), ("br", 1.0, 1.0),
 ]
+#: 挖空选区手柄 → 方向光标；不同角 / 边用不同双箭头。
+_HANDLE_CURSORS = {
+    "tl": Qt.SizeFDiagCursor, "br": Qt.SizeFDiagCursor,
+    "tr": Qt.SizeBDiagCursor, "bl": Qt.SizeBDiagCursor,
+    "ml": Qt.SizeHorCursor,  "mr": Qt.SizeHorCursor,
+    "tm": Qt.SizeVerCursor,  "bm": Qt.SizeVerCursor,
+}
 _BACKGROUND = QColor("#1e1e1e")
 _HANDLE_COLOR = QColor("#0a84ff")
+
+
+class _InlineTextEdit(QTextEdit):
+    """行内文字输入：无边框、不自动换行；Shift+Enter 手动换行，Enter 确定。"""
+
+    finished = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setLineWrapMode(QTextEdit.NoWrap)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.document().setDocumentMargin(0)
+        self.setViewportMargins(0, 0, 0, 0)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if event.modifiers() & Qt.ShiftModifier:
+                super().keyPressEvent(event)   # 手动换行
+            else:
+                self.finished.emit()           # 确定
+            event.accept()
+            return
+        if event.key() == Qt.Key_Escape:
+            self.finished.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        self.finished.emit()
 
 
 class EditorCanvas(QWidget):
@@ -47,6 +90,7 @@ class EditorCanvas(QWidget):
     viewChanged = Signal()
     saveRequested = Signal()
     cancelRequested = Signal()
+    colorIndexSelected = Signal(int)   # 数字键 1-7 切换模板颜色
 
     def __init__(self, image: QImage, parent: QWidget | None = None,
                  stack: Optional["ann.AnnotationStack"] = None,
@@ -78,7 +122,7 @@ class EditorCanvas(QWidget):
         self._space_held = False
         self._resize_handle = ""
         self._resize_origin = QRectF()
-        self._text_edit: Optional[QLineEdit] = None
+        self._text_edit: Optional[_InlineTextEdit] = None
         self._text_pos = QPointF()
 
         self.fit_to_window()
@@ -249,6 +293,11 @@ class EditorCanvas(QWidget):
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()
         mods = event.modifiers()
+        if Qt.Key_1 <= key <= Qt.Key_7:
+            # 1-7 直接切换模板的 7 个颜色（输入文字时按键由输入框接管）。
+            self.colorIndexSelected.emit(key - Qt.Key_1)
+            event.accept()
+            return
         if key == Qt.Key_Space and not self._space_held:
             self._space_held = True
             self.setCursor(Qt.OpenHandCursor)
@@ -388,14 +437,39 @@ class EditorCanvas(QWidget):
 
     # -- 手柄 ------------------------------------------------------------- #
     def _handle_at(self, widget_pos: QPointF) -> str:
-        if self._selected is None:
+        # 只有挖空能缩放；箭头 / 文字没有 resize 接口。
+        if self._selected is None or not isinstance(self._selected, ann.MaskAnnotation):
             return ""
         rect = self.transform.image_rect_to_widget(self._selected.bounding_rect())
+        margin = _HANDLE_HALF + 2
         for name, nx, ny in _HANDLE_POSITIONS:
             c = QPointF(rect.x() + nx * rect.width(), rect.y() + ny * rect.height())
-            if (abs(widget_pos.x() - c.x()) <= _HANDLE_HALF + 2
-                    and abs(widget_pos.y() - c.y()) <= _HANDLE_HALF + 2):
+            if (abs(widget_pos.x() - c.x()) <= margin
+                    and abs(widget_pos.y() - c.y()) <= margin):
                 return name
+        # 边框本身也能拖拽缩放（与截图选区一致），光标按边 / 角给方向。
+        if (rect.left() - margin <= widget_pos.x() <= rect.right() + margin
+                and rect.top() - margin <= widget_pos.y() <= rect.bottom() + margin):
+            near_left = abs(widget_pos.x() - rect.left()) <= margin
+            near_right = abs(widget_pos.x() - rect.right()) <= margin
+            near_top = abs(widget_pos.y() - rect.top()) <= margin
+            near_bottom = abs(widget_pos.y() - rect.bottom()) <= margin
+            if near_left and near_top:
+                return "tl"
+            if near_right and near_top:
+                return "tr"
+            if near_left and near_bottom:
+                return "bl"
+            if near_right and near_bottom:
+                return "br"
+            if near_left:
+                return "ml"
+            if near_right:
+                return "mr"
+            if near_top:
+                return "tm"
+            if near_bottom:
+                return "bm"
         return ""
 
     def _resize_mask(self, widget_pos: QPointF) -> None:
@@ -418,31 +492,58 @@ class EditorCanvas(QWidget):
         mask.end = QPointF(right, bottom)
 
     def _update_cursor(self, widget_pos: QPointF) -> None:
-        if self._handle_at(widget_pos):
-            self.setCursor(Qt.SizeFDiagCursor)
+        handle = self._handle_at(widget_pos)
+        if handle in _HANDLE_CURSORS:
+            # 不同角 / 边给不同方向的双箭头，不能全用同一种光标。
+            self.setCursor(_HANDLE_CURSORS[handle])
         else:
             self.setCursor(Qt.ArrowCursor)
 
     # -- 行内文字 --------------------------------------------------------- #
     def _begin_text(self, image_pos: QPointF, widget_pos: QPointF) -> None:
-        edit = QLineEdit(self)
+        edit = _InlineTextEdit(self)
+        edit.setToolTip("Shift+Enter 换行 · Enter 确定")
         px = max(8, int(self.style.font_size * self.transform.total_scale))
+        # 与最终 TextAnnotation 使用同一字体，避免确定后文字大小/位置跳动。
+        font = QFont()
+        font.setPixelSize(px)
+        edit.setFont(font)
+        edit.setFixedWidth(240)
+        # 输入框尽量"隐形"：透明背景、无边框，只留光标和与最终标注同色的文字。
         edit.setStyleSheet(
-            f"background: rgba(0,0,0,170); color: {self.style.color.name()};"
-            f" border: 1px dashed #0a84ff; font-size: {px}px;"
+            "QTextEdit { background: transparent; border: none; padding: 0;"
+            f" color: {self.style.color.name()};"
+            " selection-background-color: rgba(10,132,255,120); }"
         )
-        edit.move(widget_pos.toPoint())
-        edit.resize(220, px + 12)
-        edit.editingFinished.connect(self._commit_text_edit)
-        edit.show()
-        edit.setFocus()
+        palette = edit.palette()
+        transparent = QColor(0, 0, 0, 0)
+        palette.setColor(QPalette.Base, transparent)
+        palette.setColor(QPalette.Window, transparent)
+        palette.setColor(QPalette.Text, self.style.color)
+        edit.setPalette(palette)
+        edit.viewport().setAutoFillBackground(False)
+
         self._text_edit = edit
         self._text_pos = QPointF(image_pos)
+        edit.finished.connect(self._commit_text_edit)
+        edit.textChanged.connect(lambda: self._sync_text_edit_height(edit))
+        self._sync_text_edit_height(edit)
+        # 输入框和最终 TextAnnotation 都用 QTextDocument 布局，直接放在
+        # 锚点上即可；-1px 抵消 QTextEdit 视口相对左上角的 1px 内容偏移。
+        edit.move(widget_pos.toPoint() - QPoint(1, 0))
+        edit.show()
+        edit.setFocus()
+
+    def _sync_text_edit_height(self, edit: _InlineTextEdit) -> None:
+        """输入框随手动换行增高；不开启自动换行。"""
+        edit.document().setTextWidth(max(1, edit.viewport().width()))
+        height = int(edit.document().size().height()) + 2
+        edit.setFixedHeight(max(edit.fontMetrics().height() + 2, height))
 
     def _commit_text_edit(self) -> None:
         if self._text_edit is None:
             return
-        text = self._text_edit.text()
+        text = self._text_edit.toPlainText()
         edit = self._text_edit
         self._text_edit = None
         edit.deleteLater()

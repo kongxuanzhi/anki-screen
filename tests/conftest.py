@@ -64,7 +64,7 @@ def _isolate_base_config():
     from ankisnip.base.config import Config
     from ankisnip.settings import Settings
 
-    keys = ("pen_color", "pen_width", "save_dir", "hotkey")
+    keys = ("pen_color", "pen_width", "font_size", "save_dir", "hotkey")
     snapshots = []
     for cls in (Config, Settings):
         obj = cls()
