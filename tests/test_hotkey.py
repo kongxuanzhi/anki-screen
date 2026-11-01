@@ -214,14 +214,14 @@ def test_manager_restart_swaps_hotkey(monkeypatch):
     assert seen == ["<ctrl>+<shift>+a", None, "<ctrl>+<alt>+b"]
 
 
-def test_settings_dialog_exposes_hotkey_recorder():
-    """设置对话框里的热键行必须是录制控件，而不是手输文本框。"""
+def test_hotkey_dialog_exposes_hotkey_recorder():
+    """快捷键设置是独立弹窗，使用录制控件而不是手输文本框。"""
+    from ankisnip.hotkey_dialog import HotkeyDialog
     from ankisnip.settings import Settings
-    from ankisnip.settings_dialog import SettingsDialog
 
     settings = Settings()
     settings.hotkey = "<cmd>+<shift>+a"
-    dialog = SettingsDialog(settings)
+    dialog = HotkeyDialog(settings)
     assert dialog.hotkey_edit.spec() == "<cmd>+<shift>+a"
     assert "A" in dialog.hotkey_edit._display.text()
     assert "<" not in dialog.hotkey_edit._display.text()
@@ -229,3 +229,51 @@ def test_settings_dialog_exposes_hotkey_recorder():
     dialog.hotkey_edit.set_spec("<ctrl>+<alt>+<f5>")
     dialog.apply()
     assert settings.hotkey == "<ctrl>+<alt>+<f5>"
+
+
+def test_hotkey_dialog_ignores_non_widget_parent():
+    """AnkiSnipApp 是 QObject：误当 QDialog parent 会抛 TypeError（菜单点了没反应）。"""
+    from PySide6.QtCore import QObject
+
+    from ankisnip.hotkey_dialog import HotkeyDialog
+    from ankisnip.settings import Settings
+
+    dialog = HotkeyDialog(Settings(), "状态", QObject())
+    assert dialog.parent() is None
+
+
+def test_settings_dialog_only_exposes_image_field_choice():
+    """笔记类型 / 字段映射不应出现在设置界面；只让用户选挖空图片字段。"""
+    from ankisnip.settings import Settings
+    from ankisnip.settings_dialog import SettingsDialog
+
+    dialog = SettingsDialog(Settings())
+    assert hasattr(dialog, "field_combo")
+    for hidden in ("model_name", "image_field", "kong_field",
+                   "question_field", "relation_field", "field_order"):
+        assert hidden not in dialog.edits
+    assert "anki_url" in dialog.edits
+    assert not hasattr(dialog, "snapshot_label")
+    for widget in ("hotkey_enabled", "launch_at_login"):
+        assert hasattr(dialog, widget), widget
+    for gone in ("delay_spin", "tool_combo", "color_combo", "font_spin"):
+        assert not hasattr(dialog, gone), gone
+
+
+def test_settings_dialog_autosaves_on_change():
+    """设置窗口没有确定/取消：改动后自动写回。"""
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    from ankisnip.settings import Settings
+    from ankisnip.settings_dialog import SettingsDialog
+
+    settings = Settings()
+    settings.hotkey_enabled = True
+    dialog = SettingsDialog(settings)
+    dialog.hotkey_enabled.setChecked(False)
+
+    loop = QEventLoop()
+    QTimer.singleShot(400, loop.quit)
+    loop.exec()
+
+    assert settings.hotkey_enabled is False

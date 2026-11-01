@@ -17,7 +17,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QPixmap
-from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QMessageBox,
+    QSystemTrayIcon,
+)
 
 from . import logging_setup
 from .anki_connect import AnkiConnect, AnkiConnectError
@@ -56,13 +61,26 @@ class AnkiSnipApp(SnipApp):
         menu = self._tray_menu
         last = menu.actions()[-1]  # 「退出」之前插入
 
+        # 「牌组目录」两项紧跟「截图」，替代原来的保存目录两项。
+        actions = menu.actions()
+        after_capture = actions[1] if len(actions) > 1 else None
+        hotkey_action = QAction("快捷键设置…", menu)
+        hotkey_action.triggered.connect(self._open_hotkey_settings)
+        open_deck = QAction("打开牌组目录", menu)
+        open_deck.triggered.connect(self._open_offline_dir)
+        archive = QAction("归档离线牌包", menu)
+        archive.triggered.connect(self._archive_offline_pack)
+        choose_deck = QAction("设置牌组目录…", menu)
+        choose_deck.triggered.connect(self._choose_offline_dir)
+        for action in (hotkey_action, open_deck, archive, choose_deck):
+            if after_capture is not None:
+                menu.insertAction(after_capture, action)
+            else:
+                menu.addAction(action)
+
         for title, slot in [
             ("设置…", self._open_settings),
-            ("归档离线牌包", self._archive_offline_pack),
-            ("打开牌包目录", self._open_offline_dir),
-            ("打开日志目录", self._open_log_dir),
             ("检查 Anki 连接", self._check_anki),
-            ("热键状态…", self._show_hotkey_status),
         ]:
             action = QAction(title, menu)
             action.triggered.connect(slot)
@@ -92,23 +110,41 @@ class AnkiSnipApp(SnipApp):
             finally:
                 self._hotkey_suspend_depth -= 1
                 if manager is not None and self._hotkey_suspend_depth == 0:
-                    manager.restart(self._config.hotkey)
-                    self._set_capture_label(with_hotkey=manager.status.ok)
+                    if getattr(self._config, "hotkey_enabled", True):
+                        manager.restart(self._config.hotkey)
+                        self._set_capture_label(with_hotkey=manager.status.ok)
+                    else:
+                        manager.stop()
+                        self._set_capture_label(with_hotkey=False)
 
         return _suspend()
 
-    def _show_hotkey_status(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
+    def _open_hotkey_settings(self) -> None:
+        from .hotkey_dialog import HotkeyDialog
 
-        text = self.hotkey_status_text()
-        box = QMessageBox(QMessageBox.Information, "全局热键状态",
-                          text + "\n\n可在「设置…」里点击「录制…」更换快捷键，"
-                                 "无需重启程序。", QMessageBox.Ok)
-        self._make_dialog_hook(box)
-        box.exec()
+        # 注意：AnkiSnipApp 是 QObject，不是 QWidget，不能当 QDialog 的 parent；
+        # 传进去会抛 TypeError，菜单点了就"没反应"。
+        dialog = HotkeyDialog(self._config, self.hotkey_status_text())
+        # 对话框开着（尤其录制时）不能让旧热键抢按键。
+        with self._hotkey_suspended():
+            accepted = dialog.exec()
+        if not accepted:
+            return
+        dialog.apply()
+        # 用户主动设置快捷键 = 打开全局热键。
+        self._config.hotkey_enabled = True
+        status = self.reload_hotkey()
+        if status is not None and not status.ok:
+            self._show_message(
+                "快捷键设置",
+                "已保存，但注册失败：\n" + status.error,
+                QMessageBox.Warning)
+        else:
+            display = status.display if status is not None else dialog.spec()
+            self._show_message("快捷键设置", f"已生效：{display}")
 
     def _open_settings(self) -> None:
-        dialog = SettingsDialog(self._config, pause_hotkey=self._hotkey_suspended)
+        dialog = SettingsDialog(self._config)
         # 对话框一关就把前台交还回去（事件驱动，见 mac_focus.install_resign_on_close）。
         if _IS_MAC:
             try:
@@ -119,21 +155,23 @@ class AnkiSnipApp(SnipApp):
                 LOG.debug("挂载设置对话框的关闭钩子失败", exc_info=True)
         # 设置期间挂起热键：否则在对话框里按下当前快捷键会直接触发截图。
         with self._hotkey_suspended():
-            accepted = dialog.exec()
-        if accepted:
-            dialog.apply()
-            self._saver = AnkiSaver(self._config)
-            status = self.reload_hotkey()
-            if status is None or status.ok:
-                self._notify(f"设置已保存。热键 {status.display if status else ''} 已生效。")
-            else:
-                self._notify("设置已保存，但热键未生效：\n" + status.error,
-                             icon=QSystemTrayIcon.Warning)
+            dialog.exec()
+        # 没有确定 / 取消：对话框里的改动已经即时保存，关闭后再应用副作用。
+        dialog.apply()
+        self._saver = AnkiSaver(self._config)
+        try:
+            from .autostart import set_enabled as set_autostart
+
+            set_autostart(self._config.launch_at_login)
+        except Exception as exc:  # noqa: BLE001 - 只影响自启动，不阻塞保存
+            LOG.warning("设置开机自启动失败", exc_info=True)
+            self._show_message(
+                "开机自启动",
+                f"设置失败：\n{exc}",
+                QMessageBox.Warning)
+        self.reload_hotkey()
         # 设置对话框是新开的窗口，关掉后本应用会留在前台，照样把焦点退回去。
         self._resign_frontend()
-
-    def _open_log_dir(self) -> None:
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(logging_setup.log_dir())))
 
     # -- 弹窗：关闭即交还前台 ---------------------------------------------- #
     def _make_dialog_hook(self, dialog):
@@ -146,6 +184,19 @@ class AnkiSnipApp(SnipApp):
             except Exception:  # pragma: no cover - 平台相关
                 LOG.debug("挂载对话框关闭钩子失败", exc_info=True)
         return dialog
+
+    def _show_message(self, title: str, text: str, icon=QMessageBox.Information,
+                      extra_label: str | None = None,
+                      extra_slot=None) -> None:
+        """托盘菜单动作的明确反馈（不依赖系统通知，通知可能被关掉）。"""
+        box = QMessageBox(icon, title, text, QMessageBox.Ok)
+        extra = None
+        if extra_label:
+            extra = box.addButton(extra_label, QMessageBox.ActionRole)
+        self._make_dialog_hook(box)
+        box.exec()
+        if extra is not None and box.clickedButton() is extra and extra_slot:
+            extra_slot()
 
     def _save_pixmap(self, pixmap: "QPixmap") -> None:
         """另存为：用对话框实例（而非静态函数）以便挂上关闭钩子。"""
@@ -181,28 +232,57 @@ class AnkiSnipApp(SnipApp):
 
     def _open_offline_dir(self) -> None:
         directory = Path(self._config.offline_dir)
-        if not directory.is_dir():
-            self._notify("离线牌包目录还不存在：%s" % directory,
-                         icon=QSystemTrayIcon.Warning)
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._show_message(
+                "打开牌组目录",
+                f"无法打开 / 创建目录：\n{directory}\n\n{exc}",
+                QMessageBox.Warning)
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+
+    def _choose_offline_dir(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            None, "选择牌组目录", self._config.offline_dir)
+        if not directory:
+            return
+        self._config.offline_dir = directory
+        self._show_message(
+            "牌组目录已设置",
+            f"离线牌包会保存到：\n{directory}")
 
     def _archive_offline_pack(self) -> None:
         """把当前累积的牌包封口留档，之后重新开始一个新批次。"""
         try:
             batch = self._batch()
             if not batch.apkg_path.is_file():
-                self._notify("还没有可归档的离线牌包。\n"
-                             "在 Anki 没运行时「保存到 Anki」就会攒到离线牌包里。")
+                self._show_message(
+                    "归档离线牌包",
+                    "还没有可归档的离线牌包。\n\n"
+                    "在 Anki 没运行时「保存到 Anki」的卡片会先攒在：\n"
+                    f"{self._config.offline_dir}",
+                    QMessageBox.Information,
+                    extra_label="打开目录",
+                    extra_slot=self._open_offline_dir,
+                )
                 return
             total = batch.count
             archived = batch.archive()
         except Exception as exc:  # pragma: no cover - IO 异常
             LOG.exception("归档离线牌包失败")
-            self._notify("归档失败：%s" % exc, icon=QSystemTrayIcon.Warning)
+            self._show_message(
+                "归档离线牌包", f"归档失败：\n{exc}", QMessageBox.Critical)
             return
-        self._notify(f"已归档 %d 张卡片的牌包：\n{archived}\n"
-                     "双击即可导入 Anki；之后保存的卡片会攒进新牌包。" % total)
+        self._show_message(
+            "归档离线牌包",
+            f"已归档 {total} 张卡片的牌包：\n{archived}\n\n"
+            "双击即可导入 Anki；之后保存的卡片会攒进新牌包。",
+            QMessageBox.Information,
+            extra_label="打开目录",
+            extra_slot=lambda: QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(Path(archived).parent))),
+        )
 
     def _check_anki(self) -> None:
         client = AnkiConnect(self._config.anki_url, self._config.anki_timeout)
@@ -210,12 +290,22 @@ class AnkiSnipApp(SnipApp):
             version = client.version()
             decks = client.deck_names()
         except AnkiConnectError as exc:
-            self._notify(f"Anki 不可用：{exc}", icon=QSystemTrayIcon.Warning)
+            LOG.warning("检查 Anki 连接失败", exc_info=True)
+            self._show_message(
+                "检查 Anki 连接",
+                "无法连接 AnkiConnect。\n\n"
+                "请确认 Anki 已启动、已安装 AnkiConnect，"
+                "并且地址 / 端口正确。",
+                QMessageBox.Warning)
             return
         # 顺手刷新模板快照：离线导出 .apkg 时能不能渲染挖空，全靠它。
         ok = self._saver.ensure_template_snapshot(force=True)
-        extra = "；模板快照已更新" if ok else "；⚠️ 笔记类型模板抓取失败，离线导出可能不显示挖空"
-        self._notify(f"AnkiConnect v{version} 正常；牌组 {len(decks)} 个{extra}。")
+        snapshot = "已更新" if ok else "抓取失败（离线导出可能不显示挖空）"
+        self._show_message(
+            "检查 Anki 连接",
+            f"AnkiConnect v{version} 连接正常。\n"
+            f"牌组：{len(decks)} 个\n"
+            f"模板快照：{snapshot}")
 
     def start_capture(self) -> None:
         """快照当前 overlay 列表，调用后再重连新增 overlays。"""
@@ -321,7 +411,7 @@ class AnkiSnipApp(SnipApp):
                 return
             self._notify(result.message)
             # 离线导出不再自动弹 Finder：牌包现在是累积的同一个文件，每次保存
-            # 都弹一个窗口会很吵。要看/要导入可以用托盘菜单「打开牌包目录」。
+            # 都弹一个窗口会很吵。要看/要导入可以用托盘菜单「打开牌组目录」。
         finally:
             # 错误对话框已经关掉，此刻可以安全地把前台交还给来处。
             self._resign_frontend()

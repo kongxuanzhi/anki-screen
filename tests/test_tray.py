@@ -97,7 +97,14 @@ def test_anki_tray_menu_entries_are_inserted_before_quit():
         assert obj._tray.contextMenu() is obj._tray_menu
         titles = [a.text() for a in obj._tray_menu.actions()]
         assert titles[0].startswith("截图")
-        for expected in ("设置…", "打开日志目录", "检查 Anki 连接", "热键状态…"):
+        assert titles[1] == "快捷键设置…", "快捷键入口紧跟「截图」"
+        assert titles[2] == "打开牌组目录"
+        assert titles[3] == "设置牌组目录…"
+        for gone in ("打开保存目录", "设置保存目录…", "打开牌包目录",
+                     "打开日志目录", "热键状态…"):
+            assert gone not in titles
+        for expected in ("快捷键设置…", "打开牌组目录", "设置牌组目录…", "设置…",
+                         "归档离线牌包", "检查 Anki 连接"):
             assert expected in titles
         assert titles.index("退出") == len(titles) - 1
     finally:

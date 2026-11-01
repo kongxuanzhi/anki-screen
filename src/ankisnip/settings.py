@@ -61,6 +61,31 @@ class Settings(Config):
         # 覆盖基座的 QSettings 作用域（组织名与应用名），避免与基座原程序串味。
         self._s = _make_settings(ORG, APP)
 
+    @staticmethod
+    def _bool(value, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value.strip().lower() not in ("false", "0", "no", "off", "")
+        return bool(value)
+
+    # -- 全局 / 启动 ------------------------------------------------------- #
+    @property
+    def hotkey_enabled(self) -> bool:
+        return self._bool(self._s.value("hotkey_enabled", True), True)
+
+    @hotkey_enabled.setter
+    def hotkey_enabled(self, value: bool) -> None:
+        self._s.setValue("hotkey_enabled", bool(value))
+
+    @property
+    def launch_at_login(self) -> bool:
+        return self._bool(self._s.value("launch_at_login", False), False)
+
+    @launch_at_login.setter
+    def launch_at_login(self, value: bool) -> None:
+        self._s.setValue("launch_at_login", bool(value))
+
     # -- 画笔 / 文字 ------------------------------------------------------- #
     @property
     def font_size(self) -> int:

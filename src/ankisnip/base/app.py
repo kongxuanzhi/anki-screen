@@ -8,11 +8,10 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import QObject, QPoint, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QPoint, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QCursor,
-    QDesktopServices,
     QFont,
     QGuiApplication,
     QIcon,
@@ -165,20 +164,11 @@ class SnipApp(QObject):
         self._capture_action.triggered.connect(self.start_capture)
         menu.addAction(self._capture_action)
 
-        open_dir = QAction("打开保存目录", menu)
-        open_dir.triggered.connect(self._open_save_dir)
-        menu.addAction(open_dir)
-
-        set_dir = QAction("设置保存目录…", menu)
-        set_dir.triggered.connect(self._choose_save_dir)
-        menu.addAction(set_dir)
-
         if _IS_MAC:
             menu.addSeparator()
             perm_menu = menu.addMenu("权限设置…")
-            acc = QAction("辅助功能（全局热键）", perm_menu)
-            acc.triggered.connect(permissions.open_accessibility_settings)
-            perm_menu.addAction(acc)
+            # 全局热键走 Carbon RegisterEventHotKey，不需要辅助功能；只有
+            # pynput 兜底才需要，因此不再把「辅助功能」放进日常菜单。
             rec = QAction("屏幕录制（截图必需）", perm_menu)
             rec.triggered.connect(permissions.open_screen_recording_settings)
             perm_menu.addAction(rec)
@@ -213,15 +203,6 @@ class SnipApp(QObject):
     def _tray_activation_is_capture(reason) -> bool:
         return reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick)
 
-    def _open_save_dir(self) -> None:
-        path = self._config.ensure_save_dir()
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
-
-    def _choose_save_dir(self) -> None:
-        directory = QFileDialog.getExistingDirectory(None, "选择保存目录", self._config.save_dir)
-        if directory:
-            self._config.save_dir = directory
-
     # ------------------------------------------------------------------ #
     # global hotkey (added: native-first, pynput fallback)
     # ------------------------------------------------------------------ #
@@ -240,6 +221,9 @@ class SnipApp(QObject):
             return
 
         self._hotkey_manager = GlobalHotkeyManager(self._on_hotkey)
+        if not getattr(self._config, "hotkey_enabled", True):
+            self._set_capture_label(with_hotkey=False)
+            return
         status = self._hotkey_manager.start(self._config.hotkey)
         self._set_capture_label(with_hotkey=status.ok)
         if status.ok:
@@ -294,6 +278,11 @@ class SnipApp(QObject):
     def reload_hotkey(self):
         """热重载热键（改设置后立即生效，无需重启）。"""
         manager = getattr(self, "_hotkey_manager", None)
+        if not getattr(self._config, "hotkey_enabled", True):
+            if manager is not None:
+                manager.stop()
+            self._set_capture_label(with_hotkey=False)
+            return getattr(manager, "status", None)
         if manager is None:
             self._install_hotkey()
             manager = getattr(self, "_hotkey_manager", None)
