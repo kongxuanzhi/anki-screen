@@ -6,7 +6,7 @@
                 ``MASK`` 工具类型与 ``AnnotationStack.remove``
 ``coords.py``   坐标变换唯一出入口（image / widget / norm）
 ``editor_*``    可缩放平移的编辑器（复用基座标注栈）
-``rasterize.py`` 烧录导出（排除挖空）
+``rasterize.py`` 合成导出（排除挖空）
 ``kong/``       现有 Anki 插件 ``kong`` 字段的序列化 / 加密（Python 移植）
 ``anki_*``      AnkiConnect 直连与 genanki 离线导出
 ``saver.py``    保存链路编排

@@ -38,9 +38,9 @@ from .mask_colors import DEFAULT_COLOR, MASK_COLORS, normalize
 
 #: 主工具（常驻第一行）。
 _PRIMARY_TOOLS = [
-    (ToolType.MASK, "▢", "挖空：只保存坐标，不烧录进图片（模板支持 7 色）"),
-    (ToolType.ARROW, "↗", "箭头（会烧录进图片）"),
-    (ToolType.TEXT, "T", "文字（会烧录进图片）"),
+    (ToolType.MASK, "▢", "挖空：只保存坐标，不合成进图片（模板支持 7 色）"),
+    (ToolType.ARROW, "↗", "箭头（会合成进图片）"),
+    (ToolType.TEXT, "T", "文字（会合成进图片）"),
     (None, "✥", "选择 / 移动标注"),
 ]
 
@@ -132,7 +132,7 @@ class EditorToolbar(QFrame):
 
         self._reselect_btn = QPushButton("⛶", self)
         self._reselect_btn.setObjectName("reselectButton")
-        self._reselect_btn.setToolTip("回到选区：重新调整截图范围")
+        self._reselect_btn.setToolTip("选区：重新调整截图范围")
         self._reselect_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         self._reselect_btn.setCheckable(True)
         self._reselect_btn.setChecked(True)   # 选区态默认高亮「回到选区」
@@ -208,13 +208,13 @@ class EditorToolbar(QFrame):
         row.addWidget(self._more_btn)
 
         copy_btn = QPushButton("复制", self)
-        copy_btn.setToolTip("把烧录后的图片复制到剪贴板（含挖空）")
+        copy_btn.setToolTip("把合成后的图片复制到剪贴板（含挖空）")
         copy_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         copy_btn.clicked.connect(self.copyRequested.emit)
         row.addWidget(copy_btn)
 
         self._save_image_btn = QPushButton("保存图片…", self)
-        self._save_image_btn.setToolTip("把烧录后的图片存到磁盘（含挖空）")
+        self._save_image_btn.setToolTip("把合成后的图片存到磁盘（含挖空）")
         self._save_image_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         self._save_image_btn.clicked.connect(self.saveImageRequested.emit)
         row.addWidget(self._save_image_btn)
@@ -225,7 +225,7 @@ class EditorToolbar(QFrame):
 
         self._save_btn = QPushButton("保存到 Anki", self)
         self._save_btn.setObjectName("save")
-        self._save_btn.setToolTip("烧录箭头/文字，挖空写入 kong 字段，新建 Anki 卡片")
+        self._save_btn.setToolTip("合成箭头/文字，挖空写入 kong 字段，新建 Anki 卡片")
         self._save_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         self._save_btn.clicked.connect(self.saveToAnkiRequested.emit)
         row.addWidget(self._save_btn)
@@ -392,6 +392,6 @@ class EditorToolbar(QFrame):
         self._mask_label.setToolTip(
             f"本次将写入 {count} 个挖空" if count else "")
         self._save_btn.setToolTip(
-            f"烧录箭头/文字，{count} 个挖空写入 kong 字段，新建 Anki 卡片"
+            f"合成箭头/文字，{count} 个挖空写入 kong 字段，新建 Anki 卡片"
             if count else "当前没有挖空，将只保存图片（kong 字段为空）"
         )

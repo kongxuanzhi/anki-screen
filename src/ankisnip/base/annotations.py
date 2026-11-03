@@ -41,7 +41,7 @@ class ToolType(str, Enum):
     HIGHLIGHT = "highlight"
     NUMBER = "number"
     # ---- AnkiSnip 注入 ----
-    # 挖空（遮挡块）。与 mosaic 的本质区别：mosaic 会烧录进导出图片，
+    # 挖空（遮挡块）。与 mosaic 的本质区别：mosaic 会合成进导出图片，
     # MASK 不参与栅格化，只以归一化坐标持久化到 Anki 的 kong 字段。
     MASK = "mask"
 

@@ -1,9 +1,9 @@
-"""导出前的「烧录」：把图片 + 箭头 + 文字栅格化成一张**原图分辨率**的图片。
+"""导出前的「合成」：把图片 + 箭头 + 文字栅格化成一张**原图分辨率**的图片。
 
 任务书 §1 / §5-C 的硬约束：
 
-* **参与烧录**：arrow、text（以及基座已有的 rect / ellipse / pen / mosaic / …）
-* **不参与烧录**：``mask``（挖空）—— 它只以坐标数据另行保存
+* **参与合成**：arrow、text（以及基座已有的 rect / ellipse / pen / mosaic / …）
+* **不参与合成**：``mask``（挖空）—— 它只以坐标数据另行保存
 
 这是"图片里能看到箭头文字、看不到挖空遮罩"这条验收项的唯一实现点。
 """
@@ -18,7 +18,7 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from .base import annotations as ann
 
 
-#: 永远不会被烧录进图片的标注类型。
+#: 永远不会被合成进图片的标注类型。
 NON_BAKED_TYPES = (ann.MaskAnnotation,)
 
 
@@ -30,7 +30,7 @@ def normalize_image(image: QImage) -> QImage:
     而标注坐标是原图物理像素，两者直接相乘的结果就是：
 
     * 只有 dpr=1 的显示器看起来正常；
-    * Retina 上整张贴图的标注被放大一倍、溢出画布 —— 看起来"完全没烧进去"。
+    * Retina 上整张贴图的标注被放大一倍、溢出画布 —— 看起来"完全没合成进去"。
 
     因此凡是这里开 painter 的地方，入口一律先把 dpr 归一（尺寸不变，只是
     去掉缩放语义）。若图片本来就是 dpr=1，返回原对象，零拷贝。
@@ -66,7 +66,7 @@ def bake(image: QImage, annotations: Sequence[ann.Annotation]) -> QImage:
     结果尺寸严格等于 ``image.size()``（原图分辨率），且挖空不在其中。
     """
     if image.isNull():
-        raise ValueError("待烧录的图片为空")
+        raise ValueError("待合成的图片为空")
 
     # dpr 归一：见 normalize_image() 的说明。少了这一步，Retina 上所有标注
     # 都会被再放大一倍。
@@ -90,7 +90,7 @@ def bake(image: QImage, annotations: Sequence[ann.Annotation]) -> QImage:
 
 
 def bake_for_export(image: QImage, annotations: Sequence[ann.Annotation]) -> QImage:
-    """导出语义的烧录：先剔除挖空，再栅格化。
+    """导出语义的合成：先剔除挖空，再栅格化。
 
     这是「保存后的图片里看不到挖空遮罩」这条验收项的入口。
     """
@@ -100,7 +100,7 @@ def bake_for_export(image: QImage, annotations: Sequence[ann.Annotation]) -> QIm
 
 def bake_including_masks(image: QImage, annotations: Sequence[ann.Annotation],
                          fill_alpha: int = 255, draw_border: bool = False) -> QImage:
-    """**含挖空**的烧录，用于「复制 / 保存图片」。
+    """**含挖空**的合成，用于「复制 / 保存图片」。
 
     保存到 Anki 时挖空只以坐标数据保存（走 :func:`bake_for_export`）；
     但复制或另存图片时，用户要的就是"看到什么就拿到什么"，
@@ -132,7 +132,7 @@ def bake_including_masks(image: QImage, annotations: Sequence[ann.Annotation],
 
 def bake_and_save(image: QImage, annotations: Sequence[ann.Annotation], path: str,
                   quality: int = -1) -> str:
-    """烧录并写入磁盘（PNG / JPG 由后缀决定）。失败时抛出 :class:`IOError`。"""
+    """合成并写入磁盘（PNG / JPG 由后缀决定）。失败时抛出 :class:`IOError`。"""
     result = bake(image, annotations)
     ok = result.save(path, None, quality)
     if not ok:

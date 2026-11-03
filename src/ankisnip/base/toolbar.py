@@ -27,7 +27,7 @@ _TOOLS = [
     (ToolType.MOSAIC, "▦", "马赛克"),
     (ToolType.HIGHLIGHT, "▥", "高亮"),
     (ToolType.NUMBER, "①", "序号"),
-    (ToolType.MASK, "▢", "挖空（不烧录进图片，仅保存坐标）"),  # AnkiSnip 注入
+    (ToolType.MASK, "▢", "挖空（不合成进图片，仅保存坐标）"),  # AnkiSnip 注入
 ]
 
 

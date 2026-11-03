@@ -137,7 +137,7 @@ def export_apkg(image_path: str | Path, fields: dict, deck_name: str = DEFAULT_D
             tags: Sequence[str] = ("ankisnip",),
             snapshot: Optional[Dict] = None,
             guid: Optional[str] = None) -> Tuple[Path, bool]:
-    """把烧录后的图片 + 字段打包成 ``.apkg``。
+    """把合成后的图片 + 字段打包成 ``.apkg``。
 
     返回 ``(文件路径, 是否用了真实模板快照)``。
     """

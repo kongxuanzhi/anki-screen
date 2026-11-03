@@ -3,7 +3,7 @@
 流程（任务书 §5-C）::
 
     annotations ──► 分离 mask / 其它
-                    ├─► 其它（箭头 / 文字 …）──► 按原图分辨率烧录 ──► 图片字节
+                    ├─► 其它（箭头 / 文字 …）──► 按原图分辨率合成 ──► 图片字节
                     └─► mask（归一化）────────► kong 字符串
                                         └─► 字段 HTML <img src=... kong=...>
                                                  ├─ AnkiConnect 可用 → addNote
@@ -87,7 +87,7 @@ class AnkiSaver:
         kong = build_kong(rects)
 
         fields = self._build_fields(media_name, kong, question, relation)
-        LOG.info("prepare: 原图 %dx%d, 挖空 %d, 烧录 %d",
+        LOG.info("prepare: 原图 %dx%d, 挖空 %d, 合成 %d",
                  image.width(), image.height(), len(rects), len(baked))
         return PreparedCard(baked_image, media_name, png_bytes, fields, kong,
                             len(rects), len(baked))
@@ -127,7 +127,7 @@ class AnkiSaver:
         result.message = (
             f"已添加到牌组「{s.deck_name}」{deck_note}（note {note_id}）{extra}。\n"
             f"图片：{prepared.media_name}（{prepared.baked_image.width()}×"
-            f"{prepared.baked_image.height()}，已烧录 {prepared.baked_count} 个标注）"
+            f"{prepared.baked_image.height()}，已合成 {prepared.baked_count} 个标注）"
         )
         return result
 

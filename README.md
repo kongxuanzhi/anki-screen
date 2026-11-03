@@ -4,7 +4,7 @@
 
 1. 全局热键（`Ctrl/Cmd + Shift + A`）触发区域截图；
 2. 在编辑器里画**箭头**、写**文字**、拖**挖空**；
-3. 保存时 **箭头和文字直接烧录进图片**，**只有挖空以坐标数据写入 `kong` 字段**；
+3. 保存时 **箭头和文字直接合成进图片**，**只有挖空以坐标数据写入 `kong` 字段**；
 4. Anki 开着就通过 **AnkiConnect** 直接 `addNote` 到指定牌组；Anki 没开就生成
    **`.apkg`** 双击导入。
 
@@ -130,7 +130,7 @@ pynput，此时 macOS 才要求「辅助功能」。当前用的是哪个后端�
 | | 保存到 Anki | 复制 / 另存图片 |
 |---|---|---|
 | 挖空 | 只写进 `kong` 字段（坐标数据），**图片里看不到遮罩** | **画进图片**（不透明遮挡块） |
-| 箭头 / 文字 | 烧录进图片 | 烧录进图片 |
+| 箭头 / 文字 | 合成进图片 | 合成进图片 |
 
 这是刻意的：挖空要能被模板在复习时重新渲染出来，就不能先烧死在图片里；
 而复制到微信、贴到文档里时没有模板，必须直接看到遮挡效果。
@@ -209,7 +209,7 @@ Anki 没开的时候走离线路径，导出 `.apkg`。它**不是一张卡片�
 
 持久化只有两样：
 
-1. **烧录后的图片**（原图分辨率 = 截图选区的物理像素）
+1. **合成后的图片**（原图分辨率 = 截图选区的物理像素）
    —— 含箭头、文字；**不含挖空**。
 2. **`pic_kong` 字段**：`<img src="ankisnip_xxx.png" kong="ID6+base32(AES-ECB(base64(json)));…">`
 
@@ -226,7 +226,7 @@ src/ankisnip/
   editor_canvas.py  可缩放 / 平移画布 + 鼠标交互（作为覆盖层子控件挂进选区）
   editor_toolbar.py 工具条（选区态就已出现，含「回到选区 / 复制 / 保存到 Anki / ✕」）
   overlay_ext.py    选区 + 标注合一的覆盖层：Phase.SELECT / Phase.DRAW
-  rasterize.py      分离挖空 + 按原图分辨率烧录
+  rasterize.py      分离挖空 + 按原图分辨率合成
   kong/             现有插件 kong 序列化的 Python 移植（crypto / serialize）
   anki_connect.py   AnkiConnect 客户端（仅标准库）
   apkg_export.py    genanki 离线导出
@@ -341,7 +341,7 @@ draw 都会被再乘一次 dpr。而截图本体就带 dpr（Retina = 2），标
 像素 —— 两者相乘的结果是所有笔画被放大一倍并溢出到画布外，表现为"箭头/矩形完全
 没烧进图片"。
 
-处理办法：在**取图出口**（`overlay_ext.selection_image()`）和**烧录入口**
+处理办法：在**取图出口**（`overlay_ext.selection_image()`）和**合成入口**
 （`rasterize.normalize_image()`）各归一一次 dpr，中间所有环节统一按"1 个 QImage
 像素 = 1 个原图像素"思考；dpr 语义只在 `compose()` 返回 `QPixmap` 那一层恢复。
 挖空走 `to_norm()` 不经过 painter，所以当时只有箭头/文字受影响 —— 这个差异一度

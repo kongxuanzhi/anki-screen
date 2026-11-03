@@ -20,7 +20,7 @@
 * 标注坐标空间 = 选区图片的**原图像素**（与 ``editor_canvas`` 一致）。
 * 选区矩形 = 视口，滚轮缩放 / 空格或中键平移 / 适应窗口全部保留，
   因此「400% 下挖空、缩回 100% 位置大小不变」这条验收依然成立。
-* 导出按原图分辨率烧录，挖空不参与，见 :mod:`ankisnip.rasterize`。
+* 导出按原图分辨率合成，挖空不参与，见 :mod:`ankisnip.rasterize`。
 """
 
 from __future__ import annotations
@@ -345,7 +345,7 @@ class AnkiCaptureOverlay(CaptureOverlay):
         return self._stack.items
 
     def compose(self, include_masks: Optional[bool] = None) -> Optional[QPixmap]:
-        """导出图：按原图分辨率烧录。
+        """导出图：按原图分辨率合成。
 
         * 保存到 Anki（``include_masks=False``，默认）：挖空**不**进图片，
           只以 ``kong`` 坐标数据另存 —— 这是挖空能被模板渲染出来的前提。

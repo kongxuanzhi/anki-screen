@@ -206,11 +206,11 @@ def test_compose_excludes_masks(overlay):
 
     composed = overlay.compose()
     assert composed is not None
-    # 挖空区域在导出图里必须还是原图的白色（遮罩没有烧进去）
+    # 挖空区域在导出图里必须还是原图的白色（遮罩没有合成进去）
     img = composed.toImage()
     assert img.pixelColor(70, 60) == Qt.white or img.pixelColor(70, 60).name() == "#ffffff"
 
-    # 而箭头 / 文字这类会烧录的标注必须进图
+    # 而箭头 / 文字这类会合成的标注必须进图
     overlay._on_tool_selected(ann.ToolType.ARROW)
     _drag(overlay._canvas, 10, 10, 150, 120)
     assert len(overlay.annotation_items()) == 2

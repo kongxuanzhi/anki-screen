@@ -14,6 +14,6 @@
    - 注册进 `_TOOL_CLASSES`
    - `AnnotationStack` 增加 `remove()`（删除命中的标注，供挖空删除使用）
 2. `toolbar.py`
-   - `_TOOLS` 增加 `(ToolType.MASK, "▢", "挖空（不烧录进图片）")`
+   - `_TOOLS` 增加 `(ToolType.MASK, "▢", "挖空（不合成进图片）")`
 
 其余文件（capture / overlay / app / pin / config / permissions）与上游逐字节一致。
