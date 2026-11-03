@@ -149,6 +149,37 @@ def test_only_the_hovered_mask_is_transparent(overlay):
     assert left.hovered is False
 
 
+# --- 2.5 全屏放大：视口在选区矩形与整块屏幕之间切换 ---------------------- #
+def test_fullscreen_zoom_toggles_canvas_viewport(overlay):
+    overlay._on_tool_selected(ann.ToolType.MASK)
+    canvas = overlay._canvas
+    selection_geometry = canvas.geometry()
+
+    overlay._toggle_fullscreen_zoom()
+    assert overlay._fullscreen_zoom is True
+    assert canvas.geometry() == overlay.rect()
+    assert canvas._crop_region is not None, "全屏时画布要描出导出选区"
+
+    overlay._toggle_fullscreen_zoom()
+    assert overlay._fullscreen_zoom is False
+    assert canvas.geometry() == selection_geometry
+    assert canvas._crop_region is None
+
+
+def test_esc_exits_fullscreen_before_cancelling(overlay):
+    overlay._on_tool_selected(ann.ToolType.MASK)
+    overlay._toggle_fullscreen_zoom()
+    cancelled = []
+    overlay.cancelled.connect(lambda: cancelled.append(1))
+
+    overlay._cancel()
+    assert not cancelled, "全屏放大态 Esc 只退视口，不取消截图"
+    assert overlay._fullscreen_zoom is False
+
+    overlay._cancel()
+    assert cancelled, "退出全屏后再按 Esc 才取消"
+
+
 # --- 3. Carbon：同一个 EventRef 只回调一次 ------------------------------ #
 @pytest.mark.skipif(__import__("sys").platform != "darwin", reason="仅 macOS 后端")
 def test_carbon_event_is_deduplicated_across_targets():

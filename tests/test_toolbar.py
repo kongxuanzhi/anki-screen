@@ -13,6 +13,17 @@ def _toolbar(color: str = DEFAULT_COLOR) -> EditorToolbar:
     return EditorToolbar(QColor(color), 3, 24)
 
 
+def test_zoom_menu_has_fullscreen_toggle():
+    """缩放菜单新增「全屏放大（F）」开关项。"""
+    tb = _toolbar()
+    texts = [a.text() for a in tb._zoom_menu.actions()]
+    assert "全屏放大（F）" in texts
+    assert tb._fullscreen_zoom_action.isCheckable()
+    assert not tb._fullscreen_zoom_action.isChecked()
+    tb.set_fullscreen_zoom(True)
+    assert tb._fullscreen_zoom_action.isChecked()
+
+
 def test_palette_has_exactly_the_template_colors():
     tb = _toolbar()
     assert len(tb._color_buttons) == 7

@@ -91,6 +91,7 @@ class EditorCanvas(QWidget):
     saveRequested = Signal()
     cancelRequested = Signal()
     colorIndexSelected = Signal(int)   # 数字键 1-7 切换模板颜色
+    fullscreenZoomRequested = Signal()  # F 键：全屏放大切换
 
     def __init__(self, image: QImage, parent: QWidget | None = None,
                  stack: Optional["ann.AnnotationStack"] = None,
@@ -124,6 +125,8 @@ class EditorCanvas(QWidget):
         self._resize_origin = QRectF()
         self._text_edit: Optional[_InlineTextEdit] = None
         self._text_pos = QPointF()
+        #: 全屏放大模式下由覆盖层传入：导出选区（image 坐标），画布负责描边。
+        self._crop_region: Optional[QRectF] = None
 
         self.fit_to_window()
 
@@ -145,6 +148,26 @@ class EditorCanvas(QWidget):
         self.transform.zoom_at(anchor.x(), anchor.y(), factor)
         self.update()
         self.viewChanged.emit()
+
+    def zoom_to_region(self, region: QRectF, margin: float = 24.0) -> None:
+        """把图像里的一个区域**居中放大到铺满视口**（全屏放大模式用）。
+
+        和「适应窗口」不同：这里按区域算绝对倍率，视口里既有区域的全貌，
+        又能看到区域外的截图内容作参照。
+        """
+        viewport_w, viewport_h = self.width(), self.height()
+        zx = (viewport_w - margin * 2) / max(region.width(), 1.0)
+        zy = (viewport_h - margin * 2) / max(region.height(), 1.0)
+        self.set_absolute_zoom(min(zx, zy))
+        center = region.center()
+        self.transform.center_on(center.x(), center.y(), viewport_w, viewport_h)
+        self.update()
+        self.viewChanged.emit()
+
+    def set_crop_region(self, region: Optional[QRectF]) -> None:
+        """全屏放大时描出导出选区（``None`` = 不描，回到普通绘制态）。"""
+        self._crop_region = QRectF(region) if region is not None else None
+        self.update()
 
     # -- 工具 / 样式 ------------------------------------------------------ #
     def set_tool(self, tool: Optional[ann.ToolType]) -> None:
@@ -237,6 +260,13 @@ class EditorCanvas(QWidget):
             self._current.draw(painter, ctx)
         painter.restore()
 
+        # ---- 导出选区描边（全屏放大模式，widget 坐标保持 1px 手感）----
+        if self._crop_region is not None:
+            rect = self.transform.image_rect_to_widget(self._crop_region)
+            painter.setPen(QPen(QColor("#0a84ff"), 1.5, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(rect)
+
         # ---- 选中框 / 手柄（widget 坐标，保持 1px 手感）----
         if self._selected is not None:
             self._draw_selection(painter, self._selected)
@@ -296,6 +326,11 @@ class EditorCanvas(QWidget):
         if Qt.Key_1 <= key <= Qt.Key_7:
             # 1-7 直接切换模板的 7 个颜色（输入文字时按键由输入框接管）。
             self.colorIndexSelected.emit(key - Qt.Key_1)
+            event.accept()
+            return
+        if key == Qt.Key_F and not mods:
+            # F：全屏放大切换（具体几何变化由覆盖层负责，画布只发请求）。
+            self.fullscreenZoomRequested.emit()
             event.accept()
             return
         if key == Qt.Key_Space and not self._space_held:

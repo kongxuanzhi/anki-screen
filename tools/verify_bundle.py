@@ -87,6 +87,8 @@ def load_marks():
          "两行上下文工具条（7 色 / 线宽 / 字号）"),
         ("ankisnip.editor_canvas", "name", "_InlineTextEdit",
          "文字输入：Shift+Enter 换行 / 不自动换行"),
+        ("ankisnip.editor_canvas", "name", "zoom_to_region",
+         "全屏放大：选区居中放大铺满视口"),
         ("ankisnip.base.annotations", "name", "QTextDocument",
          "文字渲染与输入框共用 QTextDocument 布局"),
         ("ankisnip.app", "name", "_choose_offline_dir",

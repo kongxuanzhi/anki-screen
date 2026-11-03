@@ -112,6 +112,12 @@ class ViewTransform:
         self.tx = (viewport_w - self.display_w) / 2.0
         self.ty = (viewport_h - self.display_h) / 2.0
 
+    def center_on(self, image_x: float, image_y: float,
+                  viewport_w: float, viewport_h: float) -> None:
+        """平移视图，让图像点 ``(image_x, image_y)`` 落在视口中心（全屏放大用）。"""
+        self.tx = viewport_w / 2.0 - image_x * self.total_scale
+        self.ty = viewport_h / 2.0 - image_y * self.total_scale
+
     def zoom_at(self, widget_x: float, widget_y: float, factor: float) -> None:
         """以 ``(widget_x, widget_y)`` 为锚点缩放：该点下的图像像素保持不动。"""
         new_scale = min(max(self.scale * factor, MIN_SCALE), MAX_SCALE)

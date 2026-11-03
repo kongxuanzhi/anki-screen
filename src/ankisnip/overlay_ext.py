@@ -68,6 +68,8 @@ class AnkiCaptureOverlay(CaptureOverlay):
         # 标注栈由覆盖层持有：绘制态的画布被销毁重建时标注不会丢。
         self._draw_stack = ann.AnnotationStack()
         self._last_tool: Optional[ann.ToolType] = self.DEFAULT_TOOL
+        # 全屏放大：绘制态下把画布视口从选区矩形扩到整块屏幕。
+        self._fullscreen_zoom = False
 
     # -- 阶段切换 --------------------------------------------------------- #
     @property
@@ -103,6 +105,7 @@ class AnkiCaptureOverlay(CaptureOverlay):
         canvas.viewChanged.connect(self._refresh_toolbar_state)
         canvas.stackChanged.connect(self._refresh_toolbar_state)
         canvas.colorIndexSelected.connect(self._on_color_index)
+        canvas.fullscreenZoomRequested.connect(self._toggle_fullscreen_zoom)
         canvas.cancelRequested.connect(self._cancel)
         canvas.saveRequested.connect(lambda: self._finish("anki"))
         canvas.set_tool(tool)
@@ -127,10 +130,46 @@ class AnkiCaptureOverlay(CaptureOverlay):
             self._canvas.hide()
             self._canvas.deleteLater()
             self._canvas = None
+        self._fullscreen_zoom = False
         self._phase = Phase.SELECT
         self.setFocus(Qt.OtherFocusReason)
         self._refresh_toolbar_state()
         self.update()
+
+    def _toggle_fullscreen_zoom(self) -> None:
+        """全屏放大切换：绘制态下画布视口在「选区矩形」与「整个屏幕」之间切换。
+
+        全屏时把导出选区**居中放大到铺满屏幕**（留 24px 边距），选区描边改由
+        画布自己画（覆盖层的边框会被画布盖住）。
+        """
+        canvas = self._canvas
+        if canvas is None or self._selection is None:
+            return
+        self._fullscreen_zoom = not self._fullscreen_zoom
+        sel = self._selection.normalized()
+        if self._fullscreen_zoom:
+            canvas.setGeometry(self.rect())
+            canvas.set_crop_region(sel)
+            canvas.zoom_to_region(sel)
+        else:
+            rect = QRect(int(round(sel.left())), int(round(sel.top())),
+                         max(1, int(round(sel.width()))),
+                         max(1, int(round(sel.height()))))
+            canvas.setGeometry(rect)
+            canvas.set_crop_region(None)
+            canvas.fit_to_window(margin=0.0)
+        # 全屏时画布盖住整块屏幕，工具条必须压在它上面。
+        if self._toolbar is not None:
+            self._toolbar.raise_()
+        self._refresh_toolbar_state()
+        canvas.setFocus(Qt.OtherFocusReason)
+
+    def _cancel(self) -> None:
+        """Esc：全屏放大态先退回选区视口，再按一次才取消本次截图。"""
+        if self._fullscreen_zoom:
+            self._toggle_fullscreen_zoom()
+            return
+        super()._cancel()
 
     # -- 工具条 ------------------------------------------------------------ #
     def _ensure_toolbar(self) -> None:
@@ -151,6 +190,7 @@ class AnkiCaptureOverlay(CaptureOverlay):
         tb.zoomResetRequested.connect(
             lambda: self._with_canvas(lambda c: c.set_absolute_zoom(1.0)))
         tb.fitRequested.connect(lambda: self._with_canvas(lambda c: c.fit_to_window(margin=0.0)))
+        tb.fullscreenZoomRequested.connect(self._toggle_fullscreen_zoom)
         tb.reselectRequested.connect(self.leave_draw_mode)
         tb.saveImageRequested.connect(lambda: self._finish("save"))
         tb.copyRequested.connect(lambda: self._finish("copy"))
@@ -243,6 +283,7 @@ class AnkiCaptureOverlay(CaptureOverlay):
         else:
             tb.set_zoom_text(f"{canvas.transform.absolute_zoom * 100:.0f}%")
             tb.set_mask_count(len(canvas.mask_rects()))
+        tb.set_fullscreen_zoom(self._fullscreen_zoom)
         # 第二行出现 / 消失后尺寸变了，重新定位。
         self._reposition_toolbar()
 

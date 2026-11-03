@@ -103,6 +103,7 @@ class EditorToolbar(QFrame):
     zoomOutRequested = Signal()
     zoomResetRequested = Signal()
     fitRequested = Signal()
+    fullscreenZoomRequested = Signal()   # 全屏放大切换（F）
     saveToAnkiRequested = Signal()
     saveImageRequested = Signal()
     # AnkiSnip：标注已合进截图覆盖层，工具条同时承担"会话级"动作
@@ -178,7 +179,7 @@ class EditorToolbar(QFrame):
         self._zoom_btn = QToolButton(self)
         self._zoom_btn.setObjectName("zoomButton")
         self._zoom_btn.setText("100% ▾")
-        self._zoom_btn.setToolTip("缩放：放大 / 缩小 / 适应窗口 / 100%")
+        self._zoom_btn.setToolTip("缩放：放大 / 缩小 / 适应窗口 / 100% / 全屏放大（F）")
         self._zoom_btn.setPopupMode(QToolButton.InstantPopup)
         self._zoom_btn.setFixedHeight(_ROW_BUTTON_HEIGHT)
         self._zoom_menu = QMenu(self._zoom_btn)
@@ -190,6 +191,11 @@ class EditorToolbar(QFrame):
         ):
             action = self._zoom_menu.addAction(text)
             action.triggered.connect(lambda _=False, s=signal: s.emit())
+        self._zoom_menu.addSeparator()
+        self._fullscreen_zoom_action = self._zoom_menu.addAction("全屏放大（F）")
+        self._fullscreen_zoom_action.setCheckable(True)
+        self._fullscreen_zoom_action.triggered.connect(
+            self.fullscreenZoomRequested.emit)
         self._zoom_btn.setMenu(self._zoom_menu)
         row.addWidget(self._zoom_btn)
 
@@ -385,6 +391,10 @@ class EditorToolbar(QFrame):
         # 原生 menu-indicator 已由样式隐藏，用缩小字号的文字 ▾ 代替。
         self._zoom_btn.setText(f"{text} ▾")
         self._zoom_btn.setEnabled(text != "选区")
+
+    def set_fullscreen_zoom(self, enabled: bool) -> None:
+        """同步「全屏放大」菜单项的勾选状态（由覆盖层驱动）。"""
+        self._fullscreen_zoom_action.setChecked(bool(enabled))
 
     def set_mask_count(self, count: int) -> None:
         self._mask_label.setText(f"▢ {count}")

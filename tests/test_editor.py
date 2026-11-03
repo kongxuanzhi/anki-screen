@@ -30,6 +30,31 @@ def canvas():
     return c
 
 
+def test_zoom_to_region_centers_and_fills(canvas):
+    """全屏放大：选区区域居中放大到铺满视口（留 24px 边距）。"""
+    from PySide6.QtCore import QRectF
+
+    region = QRectF(100, 75, 200, 150)   # 半张图，居中
+    canvas.zoom_to_region(region)
+    # 视口 800x600：min((800-48)/200, (600-48)/150) = 3.68
+    assert canvas.transform.absolute_zoom == pytest.approx(3.68, rel=0.01)
+    center = canvas.transform.image_to_widget(region.center().x(),
+                                              region.center().y())
+    assert center.x() == pytest.approx(400.0, abs=1.0)
+    assert center.y() == pytest.approx(300.0, abs=1.0)
+
+
+def test_f_key_requests_fullscreen_zoom(canvas):
+    """F 键发出全屏放大请求（几何变化由覆盖层负责）。"""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+
+    hits = []
+    canvas.fullscreenZoomRequested.connect(lambda: hits.append(1))
+    canvas.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key_F, Qt.NoModifier))
+    assert hits
+
+
 def test_mask_created_at_400_percent(canvas):
     canvas.set_tool(ann.ToolType.MASK)
     canvas.set_absolute_zoom(4.0)
