@@ -29,6 +29,7 @@ import logging
 import re
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple
 
@@ -344,6 +345,19 @@ class _Backend:
         raise NotImplementedError
 
 
+#: 去重键（id, EventTime, 收到时刻）保留多少条。
+_SEEN_KEEP = 4
+
+#: 只把「同一投递周期内」的双目标重复投递去重（毫秒级）。
+#:
+#: 实测（2026-11-03 日志）：macOS 会把同一个热键事件在数百毫秒 ~ 数秒后
+#: **反复重放**，且 EventTime / EventRef 指针等元数据原样不变。若按
+#: （id, EventTime）无限期去重，这些重放会把用户的新按键全部吞掉 ——
+#: 表现正是"热键突然失效、多按几次又好"。因此这里只认 80ms 内的重复；
+#: 更晚到达的一律当作新按键放行（连击导致的界面重复由上层守卫吸收）。
+_DEDUP_WINDOW = 0.08
+
+
 class _MacCarbonBackend(_Backend):
     """macOS：Carbon ``RegisterEventHotKey``（不需要辅助功能权限）。"""
 
@@ -364,8 +378,8 @@ class _MacCarbonBackend(_Backend):
         self._callback = None
         #: EventHotKeyID.id → 回调（多条热键共用一个事件处理器，按 id 分发）。
         self._callbacks: Dict[int, Callable[[], None]] = {}
-        #: 同一个 EventRef 去重：见 :meth:`_on_hotkey_event`。
-        self._seen: tuple = ()
+        #: 最近投递的去重键（环形，见 ``_on_hotkey_event``）。
+        self._seen_keys: list = []
 
     @classmethod
     def available(cls) -> bool:
@@ -410,6 +424,8 @@ class _MacCarbonBackend(_Backend):
             ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
             ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p,
         ]
+        carbon.GetEventTime.restype = ctypes.c_uint32
+        carbon.GetEventTime.argtypes = [ctypes.c_void_p]
 
         # 回调必须由实例持有，否则被 GC 后 Carbon 会跳进已释放的地址。
         self._callback_type = ctypes.CFUNCTYPE(
@@ -459,26 +475,32 @@ class _MacCarbonBackend(_Backend):
             self._callbacks[index] = callback
 
     def _on_hotkey_event(self, _handler, event, _userdata) -> int:
-        # 同一个 EventRef 会先经过 dispatcher 再经过 application 两个目标，
-        # 不按指针去重的话一次按键会触发两次回调。
-        key = int(event) if event else 0
-        if key and key in self._seen:
+        # 同一个按键事件会先经 dispatcher 再经 application 两个目标各送一次，
+        # 那两次间隔只有毫秒级 —— 只有这种才需要去重。
+        # 系统延迟重放的同 metadata 事件（见 _DEDUP_WINDOW 说明）必须放行。
+        if not event:
             return 0
-        # 只留住最近一个：指针会被系统复用，留长了反而会漏掉真实按键。
-        self._seen = (key,)
-        callback = self._callback_for_event(event)
-        if callback is None:
+        dispatch = self._event_dispatch(event)
+        if dispatch is None:
             return 0
+        key, callback = dispatch
+        now = time.monotonic()
+        for seen_key, seen_at in self._seen_keys:
+            if seen_key == key and now - seen_at < _DEDUP_WINDOW:
+                return 0
+        self._seen_keys.append((key, now))
+        if len(self._seen_keys) > _SEEN_KEEP:
+            self._seen_keys.pop(0)
         try:
             callback()
         except Exception:  # 绝不让异常穿过 C 回调边界
             LOG.exception("热键回调异常")
         return 0
 
-    def _callback_for_event(self, event) -> Optional[Callable[[], None]]:
-        """从事件里读出 ``EventHotKeyID``，按 id 找到对应回调。
+    def _event_dispatch(self, event):
+        """从事件里读出 ``(热键 id, EventTime)`` 并找到对应回调；读不到返回 ``None``。
 
-        非本应用注册的热键事件（签名不匹配）直接忽略。
+        非本应用注册的热键事件（签名不匹配 / 没有对应回调）直接忽略。
         """
         EventHotKeyID, _ = self._types()
         hotkey_id = EventHotKeyID()
@@ -489,7 +511,11 @@ class _MacCarbonBackend(_Backend):
             ctypes.byref(hotkey_id))
         if status != 0 or hotkey_id.signature != self._SIG:
             return None
-        return self._callbacks.get(hotkey_id.id)
+        callback = self._callbacks.get(hotkey_id.id)
+        if callback is None:
+            return None
+        event_time = self._carbon.GetEventTime(event)
+        return (hotkey_id.id, event_time), callback
 
     def stop(self) -> None:
         carbon = self._carbon
@@ -507,7 +533,7 @@ class _MacCarbonBackend(_Backend):
                     LOG.debug("RemoveEventHandler 失败（符号可能不可达）", exc_info=True)
         self._hotkey_refs = []
         self._handler_refs = []
-        self._seen = ()
+        self._seen_keys = []
         self._callbacks = {}
         self._callback = None
         self._callback_type = None

@@ -180,26 +180,24 @@ def test_esc_exits_fullscreen_before_cancelling(overlay):
     assert cancelled, "退出全屏后再按 Esc 才取消"
 
 
-# --- 3. Carbon：同一个 EventRef 只回调一次 ------------------------------ #
+# --- 3. Carbon：去重按 (热键 id, EventTime)，不按 EventRef 指针 ---------- #
 @pytest.mark.skipif(__import__("sys").platform != "darwin", reason="仅 macOS 后端")
 def test_carbon_event_is_deduplicated_across_targets():
     from ankisnip.hotkey import _MacCarbonBackend
 
     backend = _MacCarbonBackend()
     calls = []
-    # 旧实现用 _user_callback；现在按 id 分发，直接打桩 _callback_for_event。
-    backend._callback_for_event = lambda event: (lambda: calls.append(1))
+    times = iter([10, 10, 20, 20, 30])
+    backend._event_dispatch = \
+        lambda event: ((1, next(times)), (lambda: calls.append(1)))
 
-    # 两个目标上的处理器收到的是同一个 EventRef
+    # 同一次按键的两个目标各投递一次（同 id 同 EventTime）→ 只触发一次
     backend._on_hotkey_event(None, 0x1000, None)
     backend._on_hotkey_event(None, 0x1000, None)
     assert len(calls) == 1, "同一次按键走两条派发链，必须只触发一次"
 
     # 下一次按键是新 EventRef，要照常生效
     backend._on_hotkey_event(None, 0x2000, None)
-    assert len(calls) == 2
-
-    # 指针被系统复用但属于新的一次按键时不能被误吞
     backend._on_hotkey_event(None, 0x2000, None)
     assert len(calls) == 2
     backend._on_hotkey_event(None, 0x3000, None)
@@ -207,7 +205,39 @@ def test_carbon_event_is_deduplicated_across_targets():
 
 
 @pytest.mark.skipif(__import__("sys").platform != "darwin", reason="仅 macOS 后端")
-def test_carbon_callback_for_event_dispatches_by_id():
+def test_carbon_dedup_window_lets_delayed_redelivery_fire(monkeypatch):
+    """同一 (id, EventTime) 的事件超过去重窗口后必须放行。
+
+    回归：实测 macOS 会把同一热键事件在数百毫秒 ~ 数秒后反复重放，
+    （EventTime / 指针等元数据原样不变）。无限期去重会把用户的新按键
+    全部吞掉——表现就是"热键突然失效、多按几次又好"。这里只认 80ms
+    内的双目标重复，更晚的重放一律当作新按键。
+    """
+    import ankisnip.hotkey as hotkey_mod
+    from ankisnip.hotkey import _MacCarbonBackend
+
+    backend = _MacCarbonBackend()
+    calls = []
+    now = [100.0]
+    monkeypatch.setattr(hotkey_mod.time, "monotonic", lambda: now[0])
+    backend._event_dispatch = \
+        lambda event: ((1, 42), (lambda: calls.append(1)))
+
+    # 按键 A：两个目标各投递一次（间隔 0ms）→ 只触发一次
+    backend._on_hotkey_event(None, 0x1000, None)
+    backend._on_hotkey_event(None, 0x1000, None)
+    assert len(calls) == 1
+    # 500ms 后系统重放同 metadata 事件（用户的新按键）→ 必须触发
+    now[0] += 0.5
+    backend._on_hotkey_event(None, 0x1000, None)
+    assert len(calls) == 2
+    # 该重放自己的双目标重复（0ms 内）→ 仍然去重
+    backend._on_hotkey_event(None, 0x1000, None)
+    assert len(calls) == 2
+
+
+@pytest.mark.skipif(__import__("sys").platform != "darwin", reason="仅 macOS 后端")
+def test_carbon_event_dispatch_by_id():
     """多条热键共用一个事件处理器，按 EventHotKeyID.id 分发；签名不符忽略。"""
     import ctypes
 
@@ -225,10 +255,15 @@ def test_carbon_callback_for_event_dispatches_by_id():
             target.contents.id = event & 0xFF
             return 0
 
+        def GetEventTime(self, event):
+            return event >> 8
+
     backend._carbon = FakeCarbon()
     backend._callbacks = {1: lambda: None, 2: lambda: None}
 
-    assert backend._callback_for_event(0x1001) is backend._callbacks[1]
-    assert backend._callback_for_event(0x1002) is backend._callbacks[2]
-    assert backend._callback_for_event(0x1003) is None  # 没注册的 id
-    assert backend._callback_for_event(0x1063) is None  # 签名不是本应用
+    dispatch = backend._event_dispatch(0x1001)
+    assert dispatch[0] == (1, 0x10)  # (id, EventTime)
+    assert dispatch[1] is backend._callbacks[1]
+    assert backend._event_dispatch(0x1002)[0] == (2, 0x10)
+    assert backend._event_dispatch(0x1003) is None  # 没注册的 id
+    assert backend._event_dispatch(0x1063) is None  # 签名不是本应用

@@ -388,6 +388,8 @@ class AnkiSnipApp(SnipApp):
 
     def start_capture(self) -> None:
         """快照当前 overlay 列表，调用后再重连新增 overlays。"""
+        if self._overlays:
+            return
         known = {id(o) for o in self._overlays}
         super().start_capture()
         for overlay in self._overlays:
